@@ -157,3 +157,136 @@ public class PartialUpdateDossierServiceImplTest {
         assertEquals("DOSSIER_NOT_FOUND", exception.getMessage());
     }
 }
+
+
+
+
+@SpringBootTest
+@ExtendWith(MockitoExtension.class)
+public class PartialUpdateDossierServiceImplTest {
+
+    @InjectMocks
+    private PartialUpdateDossierServiceImpl partialUpdateDossierServiceImpl;
+
+    @Mock
+    private GetDossierESHandler getDossierESHandler;
+
+    @Mock
+    private ResourceMapper resourceMapper;
+
+    @Mock
+    private SecurityService securityService;
+
+    @Mock
+    private PartialUpdateDossierServiceHandler partialUpdateDossierServiceHandler;
+
+    @Mock
+    private AuditService auditService;
+
+    @Mock
+    private UserAuth userAuth;
+
+    @Mock
+    private ValidateAdministration validateAdministration;
+
+    private DossierDescriptionRequest dossierDescriptionRequest;
+    private String consumerId = "drm_nl_test";
+    private String traceId = "12345";
+    private String dossierId = "122344567898888";
+
+    @BeforeEach
+    void setup() {
+        dossierDescriptionRequest = new DossierDescriptionRequest();
+        dossierDescriptionRequest.setDescription("Test CTV Dossier");
+        MockitoAnnotations.initMocks(this);
+    }
+
+    @Test
+    @DisplayName("Positive Scenario of Partial Update Dossier")
+    public void testPartialUpdateDossier() throws GenericException {
+        // Mock necessary objects
+        Map<String, Object> metadata = new HashMap<>();
+        metadata.put("DOS_DOSSIER_STATUS", "OPEN");
+        metadata.put("REPO_ID", "repo-id");
+        metadata.put("BASE_UNIQUE_ID", "UID123");
+
+        SearchHit searchHit = Mockito.mock(SearchHit.class);
+        when(searchHit.getSourceAsMap()).thenReturn(metadata);
+
+        Resource resource = Mockito.mock(Resource.class);
+        Decision decision = new Decision("permit");
+
+        // Mocks for methods
+        when(validateAdministration.validateUser(anyString(), anyString())).thenReturn("actorId");
+        when(getDossierESHandler.verifyDossierExists(anyString(), anyString(), anyString(), anyString(), anyString()))
+                .thenReturn(searchHit);
+        when(resourceMapper.resourceAttributeMapper(anyMap(), anyString(), anyString())).thenReturn(resource);
+        when(securityService.getAuthorizationDecision(any(Resource.class), anyString(), anyString())).thenReturn(decision);
+        when(userAuth.getAuthTokenUserId()).thenReturn("userId");
+
+        // No exceptions expected
+        doNothing().when(partialUpdateDossierServiceHandler)
+                .partialUpdateDossierNuxeo(any(NuxeoPartialUpdateDossier.class), anyString(), anyString());
+
+        doNothing().when(auditService).auditRequest(anyString(), anyString(), anyString(), anyString(), anyString());
+
+        // Call the method
+        partialUpdateDossierServiceImpl.partialUpdateDossierByPatch(consumerId, traceId, dossierId, dossierDescriptionRequest);
+
+        // Verify expected calls
+        verify(partialUpdateDossierServiceHandler, times(1))
+                .partialUpdateDossierNuxeo(any(NuxeoPartialUpdateDossier.class), anyString(), anyString());
+        verify(auditService, times(1))
+                .auditRequest(anyString(), anyString(), anyString(), anyString(), anyString());
+    }
+
+    @Test
+    @DisplayName("Negative Scenario of Partial Update Dossier - Dossier Closed")
+    public void testPartialUpdateDossier_when_DossierClosed() throws GenericException {
+        // Mock necessary objects
+        Map<String, Object> metadata = new HashMap<>();
+        metadata.put("DOS_DOSSIER_STATUS", "CLOSED");
+
+        SearchHit searchHit = Mockito.mock(SearchHit.class);
+        when(searchHit.getSourceAsMap()).thenReturn(metadata);
+
+        when(validateAdministration.validateUser(anyString(), anyString())).thenReturn("actorId");
+        when(getDossierESHandler.verifyDossierExists(anyString(), anyString(), anyString(), anyString(), anyString()))
+                .thenReturn(searchHit);
+
+        // Assert that a BadRequestException is thrown when the dossier is closed
+        BadRequestException exception = assertThrows(BadRequestException.class, () -> {
+            partialUpdateDossierServiceImpl.partialUpdateDossierByPatch(consumerId, traceId, dossierId, dossierDescriptionRequest);
+        });
+
+        assertEquals(DOSSIER_ALREADY_CLOSED.name(), exception.getMessage());
+    }
+
+    @Test
+    @DisplayName("Negative Scenario - Access Denied")
+    public void testPartialUpdateDossier_when_AccessDenied() throws GenericException {
+        // Mock necessary objects
+        Map<String, Object> metadata = new HashMap<>();
+        metadata.put("DOS_DOSSIER_STATUS", "OPEN");
+
+        SearchHit searchHit = Mockito.mock(SearchHit.class);
+        when(searchHit.getSourceAsMap()).thenReturn(metadata);
+
+        Resource resource = Mockito.mock(Resource.class);
+        Decision decision = new Decision("deny");
+
+        when(validateAdministration.validateUser(anyString(), anyString())).thenReturn("actorId");
+        when(getDossierESHandler.verifyDossierExists(anyString(), anyString(), anyString(), anyString(), anyString()))
+                .thenReturn(searchHit);
+        when(resourceMapper.resourceAttributeMapper(anyMap(), anyString(), anyString())).thenReturn(resource);
+        when(securityService.getAuthorizationDecision(any(Resource.class), anyString(), anyString())).thenReturn(decision);
+
+        // Assert that a ForbiddenRequestException is thrown
+        ForbiddenRequestException exception = assertThrows(ForbiddenRequestException.class, () -> {
+            partialUpdateDossierServiceImpl.partialUpdateDossierByPatch(consumerId, traceId, dossierId, dossierDescriptionRequest);
+        });
+
+        assertEquals(ACCESS_DENIED.name(), exception.getMessage());
+    }
+}
+

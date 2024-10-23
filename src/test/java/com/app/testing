@@ -1,0 +1,205 @@
+import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.*;
+
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
+import org.mockito.MockitoAnnotations;
+import org.springframework.test.context.junit.jupiter.SpringJUnitConfig;
+
+@SpringJUnitConfig
+public class PartialUpdateDossierServiceImplTest {
+
+    @InjectMocks
+    private PartialUpdateDossierServiceImpl classUnderTest;
+
+    @Mock
+    private SecurityService securityService;
+
+    @Mock
+    private GetDossierESHandler mockGetDossierESHandler;
+
+    @Mock
+    private ResourceMapper resourceMapper;
+
+    @Mock
+    private PartialUpdateDossierServiceHandler partialUpdateDossierServiceHandler;
+
+    @Mock
+    private AuditService auditService;
+
+    @Mock
+    private UserAuth userAuth;
+
+    @Mock
+    private ValidateAdministration validateAdministration;
+
+    private Decision decision;
+    private DossierDescriptionRequest dossierDescriptionRequest;
+
+    @BeforeEach
+    public void setup() {
+        MockitoAnnotations.initMocks(this);
+        decision = new Decision();
+        decision.setDecision("test decision");
+        decision.setResult(true);
+
+        dossierDescriptionRequest = new DossierDescriptionRequest();
+        dossierDescriptionRequest.setDescription("Test Dossier Description");
+    }
+
+    @Test
+    void testPartialUpdateDossier() throws Exception {
+        // Setup mock behavior
+        when(validateAdministration.validateUser(anyString(), anyString())).thenReturn("actorId");
+
+        SearchHit searchHit = new SearchHit(0);
+        when(mockGetDossierESHandler.verifyDossierExists(anyString(), anyString(), anyString(), anyString(), anyString())).thenReturn(searchHit);
+
+        Resource resource = new Resource();
+        when(resourceMapper.resourceAttributeMapper(anyMap(), anyString(), anyString())).thenReturn(resource);
+
+        when(securityService.getAuthorizationDecision(any(Resource.class), anyString(), anyString())).thenReturn(decision);
+
+        when(userAuth.getAuthTokenUserId()).thenReturn("authTokenUserId");
+
+        doNothing().when(auditService).auditRequest(anyString(), anyString(), anyString(), anyString());
+
+        // Invoke the method under test
+        try {
+            classUnderTest.partialUpdateDossierByPatch("consumerId", "traceId", "dossierId", dossierDescriptionRequest);
+        } catch (Exception e) {
+            fail("Unexpected exception thrown");
+        }
+
+        // Verify interactions
+        verify(partialUpdateDossierServiceHandler).partialUpdateDossierNuxeo(any(NuxeoPartialUpdateDossier.class), anyString(), anyString());
+        verify(auditService).auditRequest(anyString(), anyString(), anyString(), anyString());
+    }
+
+    @Test
+    void testPartialUpdateDossier_whenDecisionNull() throws GenericException {
+        // Setup mock behavior
+        when(validateAdministration.validateUser(anyString(), anyString())).thenReturn("actorId");
+
+        SearchHit searchHit = new SearchHit(0);
+        when(mockGetDossierESHandler.verifyDossierExists(anyString(), anyString(), anyString(), anyString(), anyString())).thenReturn(searchHit);
+
+        Resource resource = new Resource();
+        when(resourceMapper.resourceAttributeMapper(anyMap(), anyString(), anyString())).thenReturn(resource);
+
+        decision.setDecision("deny");
+        when(securityService.getAuthorizationDecision(any(Resource.class), anyString(), anyString())).thenReturn(decision);
+
+        // Invoke the method under test
+        try {
+            classUnderTest.partialUpdateDossierByPatch("consumerId", "traceId", "dossierId", dossierDescriptionRequest);
+            fail("Expected ForbiddenRequestException");
+        } catch (ForbiddenRequestException e) {
+            assertEquals("ACCESS_DENIED", e.getCode());
+            assertEquals(ForbiddenRequestException.class, e.getClass());
+            assertEquals("Consumer does not have access to the dossier", e.getMessage());
+        } catch (Exception e) {
+            fail("Unexpected exception thrown");
+        }
+
+        // Verify that audit was not called due to denied decision
+        verify(auditService, never()).auditRequest(anyString(), anyString(), anyString(), anyString());
+    }
+
+    @Test
+    void testPartialUpdateDossier_forEmployeeAudit() throws Exception {
+        // Setup mock behavior
+        when(validateAdministration.validateUser(anyString(), anyString())).thenReturn("actorId");
+
+        SearchHit searchHit = new SearchHit(0);
+        when(mockGetDossierESHandler.verifyDossierExists(anyString(), anyString(), anyString(), anyString(), anyString())).thenReturn(searchHit);
+
+        Resource resource = new Resource();
+        when(resourceMapper.resourceAttributeMapper(anyMap(), anyString(), anyString())).thenReturn(resource);
+
+        when(securityService.getAuthorizationDecision(any(Resource.class), anyString(), anyString())).thenReturn(decision);
+
+        when(userAuth.getAuthTokenUserId()).thenReturn("authTokenUserId");
+
+        decision.setActorType(UserType.EMPLOYEE);
+        doNothing().when(auditService).auditRequest(anyString(), anyString(), anyString(), anyString(), anyString());
+
+        // Invoke the method under test
+        try {
+            classUnderTest.partialUpdateDossierByPatch("consumerId", "traceId", "dossierId", dossierDescriptionRequest);
+        } catch (Exception e) {
+            fail("Unexpected exception thrown");
+        }
+
+        // Verify auditRequest with the additional objectName parameter for employees
+        verify(auditService).auditRequest(anyString(), anyString(), anyString(), anyString(), anyString());
+    }
+}
+
+
+
+
+
+seperate method 
+
+import static org.mockito.Mockito.*;
+
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
+import org.springframework.http.HttpEntity;
+import org.springframework.web.client.RestTemplate;
+
+public class AuditServiceTest {
+
+    @InjectMocks
+    private AuditService auditService;
+
+    @Mock
+    private RestTemplate restTemplate;
+
+    @Mock
+    private DRESHeaderSetting dresHeaderSetting;
+
+    @BeforeEach
+    public void setup() {
+        MockitoAnnotations.initMocks(this);
+    }
+
+    @Test
+    public void testAuditRequest_Success() {
+        // Mock RestTemplate behavior
+        doReturn(new ResponseEntity<>(new Audits(), HttpStatus.OK))
+                .when(restTemplate).postForEntity(anyString(), any(HttpEntity.class), eq(Audits.class));
+
+        try {
+            auditService.auditRequest("dossierId", "consumerId", "traceId", "operation", "objectName");
+        } catch (Exception e) {
+            fail("Unexpected exception thrown");
+        }
+
+        // Verify the interactions
+        verify(restTemplate).postForEntity(anyString(), any(HttpEntity.class), eq(Audits.class));
+    }
+
+    @Test
+    public void testAuditRequest_Failure() {
+        // Mock RestTemplate behavior to throw exception
+        doThrow(new RuntimeException("Test Exception"))
+                .when(restTemplate).postForEntity(anyString(), any(HttpEntity.class), eq(Audits.class));
+
+        try {
+            auditService.auditRequest("dossierId", "consumerId", "traceId", "operation", "objectName");
+        } catch (Exception e) {
+            fail("Unexpected exception thrown");
+        }
+
+        // Verify the interactions
+        verify(restTemplate).postForEntity(anyString(), any(HttpEntity.class), eq(Audits.class));
+    }
+}

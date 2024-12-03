@@ -1,0 +1,81 @@
+@Test
+public void testUpdateLifeCycleStatusDossier() throws GenericException {
+    // Mock setup
+    when(userAuth.getAuthToken()).thenReturn("Bearer ");
+    when(userAuth.getConsumerId()).thenReturn("503440");
+    when(elasticsearchConnectionFactory.getConnection(anyString())).thenReturn(esClient);
+
+    ReflectionTestUtils.setField(classUnderTest, "indexName", "indexName");
+
+    dossierMetaData.put("DOS_DOSSIER_STATUS", "dos:dossier_status");
+    when(mockGetDossierESHandler.verifyObjectExistsES(
+        anyString(),
+        anyString(),
+        any(),
+        anyString(),
+        any(RestHighLevelClient.class),
+        anyString()
+    )).thenReturn(dossierMetaData);
+
+    when(securityService.getAuthorizationDecision(
+        any(Resource.class), 
+        anyString(), 
+        anyString()
+    )).thenReturn(decision);
+
+    when(resourceMapper.resourceAttributeMapper(
+        anyMap(),
+        anyString(),
+        anyString()
+    )).thenReturn(resource);
+
+    metadataDID.put("DOCUMENT_LIFECYCLE_STATUS", "PROCESS");
+    metadataDID.put("DOCUMENT_IN_DOSSIER_ID", "ABCD17745");
+    metadataDID.put("REPO_ID", "REPO_ID");
+
+    when(mockGetDossierESHandler.verifyDocInDossierExists(
+        anyString(),
+        any(RestHighLevelClient.class),
+        anyString(),
+        anyString(),
+        any(),
+        anyString()
+    )).thenReturn(metadataDID);
+
+    // Mock current state
+    Optional<DocumentInDossierStatus> currentState = Optional.ofNullable(
+        DocumentInDossierStatus.fromCode(
+            metadataDID.get("DOCUMENT_LIFECYCLE_STATUS").toString()
+        )
+    );
+
+    when(auditService.auditRequest(anyString(), anyString(), anyString(), anyString()))
+        .thenReturn(null);
+
+    doNothing().when(updateLifeCycleStatusServiceHandler)
+        .updateLifeCycleStatusNuxeo(any(), anyString(), anyString());
+
+    try {
+        // Test execution
+        DocumentStatusRequest documentStatusRequest = new DocumentStatusRequest();
+        documentStatusRequest.setLifeCycleStatus("NEW_STATUS");
+
+        classUnderTest.updateLifecycleStatusDoc(
+            "dossierId",
+            "documentDossierReferenceId",
+            null,
+            "traceId",
+            documentStatusRequest
+        );
+
+        // Assertions
+        assertNotEquals(
+            currentState.orElse(null),
+            DocumentInDossierStatus.NEW_STATUS
+        );
+        assertNotNull(metadataDID.get("DOCUMENT_IN_DOSSIER_ID"));
+        assertEquals(metadataDID.get("DOCUMENT_IN_DOSSIER_ID"), "ABCD17745");
+    } catch (Exception e) {
+        fail("Unexpected exception thrown: " + e.getMessage());
+    }
+}

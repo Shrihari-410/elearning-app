@@ -1,0 +1,87 @@
+@ExtendWith(MockitoExtension.class)
+public class DeletionServiceTest {
+
+    @InjectMocks
+    private DeletionService deletionService;
+
+    @Mock
+    private DeletionVerificationRepository deletionVerificationRepository;
+
+    @Mock
+    private DeletionVerificationMapper deletionVerificationMapper;
+
+    @Mock
+    private UserClient userClient;
+
+    @Test
+    public void testGetDeletionPendingRequest_Success() {
+        // Mock data
+        List<DeletionVerificationEntity> mockEntities = List.of(
+            createMockEntity(1L, "PENDING", "Object1", "User1"),
+            createMockEntity(2L, "PENDING", "Object2", "User2")
+        );
+
+        DeletionVerification mockVerification1 = new DeletionVerification(1L, "Object1", "User1");
+        DeletionVerification mockVerification2 = new DeletionVerification(2L, "Object2", "User2");
+
+        // Stubbing
+        when(userClient.getUser()).thenReturn("503400");
+        when(deletionVerificationRepository.findByApproverId("503400")).thenReturn(mockEntities);
+        when(deletionVerificationMapper.toDeletionVerification(mockEntities.get(0))).thenReturn(mockVerification1);
+        when(deletionVerificationMapper.toDeletionVerification(mockEntities.get(1))).thenReturn(mockVerification2);
+
+        // Execute method
+        List<DeletionVerification> result = deletionService.getDeletionPendingRequest();
+
+        // Assertions
+        assertNotNull(result, "Result should not be null");
+        assertEquals(2, result.size(), "Result size should match the number of PENDING entities");
+        assertEquals(mockVerification1, result.get(0), "First verification should match");
+        assertEquals(mockVerification2, result.get(1), "Second verification should match");
+
+        // Verify interactions
+        verify(userClient).getUser();
+        verify(deletionVerificationRepository).findByApproverId("503400");
+        verify(deletionVerificationMapper, times(2)).toDeletionVerification(any(DeletionVerificationEntity.class));
+    }
+
+    @Test
+    public void testGetDeletionPendingRequest_ExceptionHandling() {
+        // Mock data
+        List<DeletionVerificationEntity> mockEntities = List.of(
+            createMockEntity(1L, "PENDING", "Object1", "User1")
+        );
+
+        // Stubbing
+        when(userClient.getUser()).thenReturn("503400");
+        when(deletionVerificationRepository.findByApproverId("503400")).thenReturn(mockEntities);
+        when(deletionVerificationMapper.toDeletionVerification(any()))
+            .thenThrow(new JsonProcessingException("Error") {});
+
+        // Execute method and assert exception
+        InternalServerException exception = assertThrows(
+            InternalServerException.class,
+            () -> deletionService.getDeletionPendingRequest(),
+            "Expected InternalServerException to be thrown"
+        );
+
+        // Assertions
+        assertNotNull(exception.getCause(), "Exception cause should not be null");
+        assertEquals(JsonProcessingException.class, exception.getCause().getClass(), "Cause should be JsonProcessingException");
+
+        // Verify interactions
+        verify(userClient).getUser();
+        verify(deletionVerificationRepository).findByApproverId("503400");
+        verify(deletionVerificationMapper).toDeletionVerification(any(DeletionVerificationEntity.class));
+    }
+
+    // Helper method to create mock entities
+    private DeletionVerificationEntity createMockEntity(Long id, String status, String deletedObject, String approverId) {
+        DeletionVerificationEntity entity = new DeletionVerificationEntity();
+        entity.setId(id);
+        entity.setStatus(status);
+        entity.setDeletedObject(deletedObject);
+        entity.setApproverId(approverId);
+        return entity;
+    }
+}

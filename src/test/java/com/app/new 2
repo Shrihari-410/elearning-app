@@ -1,0 +1,112 @@
+import java.util.*;
+import java.util.stream.Collectors;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+public class RelatedEntityInfoUpdaterHandler {
+
+    private static final Logger log = LoggerFactory.getLogger(RelatedEntityInfoUpdaterHandler.class);
+
+    private List<RelatedEntity> existingRelatedEntityInfo;
+    private ExternalApiService externalApiService; // For calling external APIs
+
+    public RelatedEntityInfoUpdaterHandler(List<RelatedEntity> existingRelatedEntityInfo,
+                                           ExternalApiService externalApiService) {
+        this.existingRelatedEntityInfo = existingRelatedEntityInfo != null
+                ? existingRelatedEntityInfo
+                : new ArrayList<>();
+        this.externalApiService = externalApiService;
+    }
+
+    /**
+     * Updates related entities for addition operation only.
+     *
+     * @param actorId   The actor performing the operation.
+     * @param traceId   The trace ID for debugging.
+     * @param dossierId The dossier ID associated with the entities.
+     * @param newEntities List of new related entities to add.
+     * @return The updated list of related entities.
+     * @throws IncorrectEntityException if validation or addition fails.
+     */
+    public List<RelatedEntity> update(String actorId, String traceId, String dossierId, List<RelatedEntity> newEntities)
+            throws IncorrectEntityException {
+
+        if (newEntities == null || newEntities.isEmpty()) {
+            log.error("No new entities provided for addition. Dossier ID: {}", dossierId);
+            throw new IncorrectEntityException("EMPTY_NEW_LIST", traceId,
+                    "No related entities provided for addition.", null, actorId);
+        }
+
+        for (RelatedEntity newEntity : newEntities) {
+            // Validate the new entity with an external API
+            if (!externalApiService.validateEntityDetails(newEntity, dossierId)) {
+                log.error("Validation failed for entity: {}", newEntity);
+                throw new IncorrectEntityException("ENTITY_VALIDATION_FAILED", traceId,
+                        "Entity validation failed via external API.", newEntity, actorId);
+            }
+
+            // Check for duplicates using an external API
+            if (externalApiService.isDuplicateEntity(newEntity, dossierId)) {
+                log.error("Duplicate entity detected: {}", newEntity);
+                throw new IncorrectEntityException("ENTITY_ALREADY_EXISTS", traceId,
+                        "Entity already exists in the system.", newEntity, actorId);
+            }
+
+            // Add the validated entity to the existing list
+            log.info("Adding new entity to the list: {}", newEntity);
+            existingRelatedEntityInfo.add(newEntity);
+        }
+
+        log.info("Successfully updated related entities. Total count: {}", existingRelatedEntityInfo.size());
+        return existingRelatedEntityInfo;
+    }
+
+    /**
+     * Fetches all existing related entities.
+     *
+     * @return List of all related entities.
+     */
+    public List<RelatedEntity> getAllRelatedEntities() {
+        return new ArrayList<>(existingRelatedEntityInfo);
+    }
+
+    /**
+     * Fetches related entities filtered by type.
+     *
+     * @param type The type of entities to filter.
+     * @return List of related entities matching the given type.
+     */
+    public List<RelatedEntity> getRelatedEntitiesByType(String type) {
+        if (type == null || type.isEmpty()) {
+            log.warn("Type is null or empty, returning all entities.");
+            return getAllRelatedEntities();
+        }
+
+        return existingRelatedEntityInfo.stream()
+                .filter(entity -> type.equalsIgnoreCase(entity.getType()))
+                .collect(Collectors.toList());
+    }
+}
+
+----__----------------------------------
+
+import org.springframework.stereotype.Service;
+
+@Service
+public class ExternalApiService {
+
+    public boolean validateEntityDetails(RelatedEntity entity, String dossierId) {
+        // Mock API call to validate entity details
+        // Replace with actual API logic
+        log.info("Validating entity: {} for dossier ID: {}", entity, dossierId);
+        return true; // Assume validation is successful
+    }
+
+    public boolean isDuplicateEntity(RelatedEntity entity, String dossierId) {
+        // Mock API call to check for duplicate entities
+        // Replace with actual API logic
+        log.info("Checking for duplicates for entity: {} in dossier ID: {}", entity, dossierId);
+        return false; // Assume no duplicate is found
+    }
+}
+

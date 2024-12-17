@@ -1,0 +1,279 @@
+public class RelatedEntityInfoUpdaterHandler {
+
+    private List<RelatedEntity> existingRelatedEntityInfo;
+    private List<RelatedEntity> newRelatedEntityInfo;
+
+    private List<RelatedEntity> tempListToCompare;
+
+    // REST Template for API calls
+    private final RestTemplate restTemplate;
+
+    public RelatedEntityInfoUpdaterHandler(RestTemplate restTemplate) {
+        this.restTemplate = restTemplate;
+    }
+
+    public List<RelatedEntity> update(String actorId, String traceId, String dossierId) throws IncorrectEntityException {
+
+        // Step 1: Validate incoming related entities against existing ones
+        validateNewEntities(actorId, traceId, dossierId);
+
+        // Step 2: Check if the dossier has documents
+        List<String> documentIds = getAllDocuments(dossierId);
+
+        if (!documentIds.isEmpty()) {
+            // Step 3: Validate entities in documents and prepare list of document IDs for update
+            List<String> documentIdsToUpdate = validateEntitiesInDocuments(documentIds, traceId);
+
+            // Step 4: Notify Documents team to update related entities for documents
+            if (!documentIdsToUpdate.isEmpty()) {
+                notifyDocumentsTeam(documentIdsToUpdate, newRelatedEntityInfo, dossierId, traceId);
+            }
+        }
+
+        // Step 5: Perform Dossier related entity addition
+        return addRelatedEntitiesToDossier();
+    }
+
+    private void validateNewEntities(String actorId, String traceId, String dossierId) throws IncorrectEntityException {
+
+        tempListToCompare = newRelatedEntityInfo.stream()
+                .map(entity -> new RelatedEntity(entity.getId(), entity.getAdministrationId(),
+                        entity.getType().toUpperCase(Locale.ENGLISH)))
+                .collect(Collectors.toList());
+
+        RelatedEntity matchedEntity = existingRelatedEntityInfo.stream()
+                .filter(existingEntity -> tempListToCompare.stream()
+                        .anyMatch(newEntity -> newEntity.getAdministrationId().equals(existingEntity.getAdministrationId())
+                                && newEntity.getId().equals(existingEntity.getId())
+                                && newEntity.getType().equals(existingEntity.getType())))
+                .findFirst()
+                .orElse(null);
+
+        if (matchedEntity != null) {
+            log.error("Related entity already exists: {}", matchedEntity);
+            throw new IncorrectEntityException(RELATED_ENTITY_INFO_ALREADY_PRESENT.name(), traceId,
+                    RELATED_ENTITY_INFO_ALREADY_PRESENT.getMessage(), matchedEntity, actorId);
+        }
+    }
+
+    private List<String> getAllDocuments(String dossierId) {
+        // Call GetAllDocuments API
+        String url = "http://document-service/api/documents?dossierId=" + dossierId;
+        ResponseEntity<List<String>> response = restTemplate.exchange(
+                url,
+                HttpMethod.GET,
+                null,
+                new ParameterizedTypeReference<List<String>>() {
+                });
+
+        if (response.getStatusCode() == HttpStatus.OK && response.getBody() != null) {
+            return response.getBody();
+        }
+
+        return Collections.emptyList(); // No documents
+    }
+
+    private List<String> validateEntitiesInDocuments(List<String> documentIds, String traceId) {
+        List<String> documentIdsToUpdate = new ArrayList<>();
+
+        documentIds.forEach(documentId -> {
+            // Simulate a call to fetch related entities for the document
+            List<RelatedEntity> documentRelatedEntities = getDocumentRelatedEntities(documentId);
+
+            boolean allEntitiesExist = newRelatedEntityInfo.stream()
+                    .allMatch(newEntity -> documentRelatedEntities.stream()
+                            .anyMatch(existingEntity -> existingEntity.getAdministrationId()
+                                    .equals(newEntity.getAdministrationId())
+                                    && existingEntity.getId().equals(newEntity.getId())
+                                    && existingEntity.getType().equals(newEntity.getType())));
+
+            if (!allEntitiesExist) {
+                documentIdsToUpdate.add(documentId); // Add document that needs updating
+            }
+        });
+
+        return documentIdsToUpdate;
+    }
+
+    private List<RelatedEntity> getDocumentRelatedEntities(String documentId) {
+        // Simulate fetching related entities for a document
+        // This can be replaced with another API call if needed
+        return new ArrayList<>(); // Mocked empty list for now
+    }
+
+    private void notifyDocumentsTeam(List<String> documentIdsToUpdate, List<RelatedEntity> relatedEntities,
+                                     String dossierId, String traceId) throws IncorrectEntityException {
+
+        String url = "http://document-service/api/documents/update";
+        Map<String, Object> request = new HashMap<>();
+        request.put("documentIds", documentIdsToUpdate);
+        request.put("relatedEntities", relatedEntities);
+
+        ResponseEntity<Void> response = restTemplate.postForEntity(url, request, Void.class);
+
+        if (!response.getStatusCode().is2xxSuccessful()) {
+            log.error("Failed to notify Documents team for dossierId: {}", dossierId);
+            throw new IncorrectEntityException("DOCUMENT_UPDATE_FAILED", traceId,
+                    "Failed to notify Documents team for related entities update", null, null);
+        }
+    }
+
+    private List<RelatedEntity> addRelatedEntitiesToDossier() {
+        List<RelatedEntity> updatedEntityList = new ArrayList<>(existingRelatedEntityInfo);
+
+        newRelatedEntityInfo.forEach(relatedEntity -> {
+            RelatedEntity newEntity = new RelatedEntity();
+            newEntity.setAdministrationId(relatedEntity.getAdministrationId());
+            newEntity.setType(relatedEntity.getType().toUpperCase(Locale.ENGLISH));
+            newEntity.setId(StringUtils.stripStart(relatedEntity.getId(), "0"));
+
+            updatedEntityList.add(newEntity);
+        });
+
+        return updatedEntityList;
+    }
+}
+
+
+
+old approach...
+public class RelatedEntityInfoUpdaterHandler {
+
+    private List<RelatedEntity> existingRelatedEntityInfo;
+    private List<RelatedEntity> newRelatedEntityInfo;
+
+    private List<RelatedEntity> tempListToCompare;
+
+    // REST Template for API calls
+    private RestTemplate restTemplate;
+
+    public RelatedEntityInfoUpdaterHandler(RestTemplate restTemplate) {
+        this.restTemplate = restTemplate;
+    }
+
+    public List<RelatedEntity> update(String actorId, String traceId, String operation, String dossierId)
+            throws IncorrectEntityException {
+
+        // Step 1: Validate incoming related entities
+        checkToUpdate(actorId, traceId, operation, dossierId);
+
+        // Step 2: Check if the dossier has documents
+        List<String> documentIds = getAllDocuments(dossierId);
+
+        if (!documentIds.isEmpty()) {
+            // Step 3: Validate related entities within documents
+            List<String> documentIdsToUpdate = validateEntitiesInDocuments(documentIds, dossierId, traceId);
+
+            // Step 4: If documents need updates, call the external Documents API
+            if (!documentIdsToUpdate.isEmpty()) {
+                callDocumentsApi(documentIdsToUpdate, newRelatedEntityInfo, dossierId, traceId);
+            }
+        }
+
+        // Step 5: Update dossier-level related entities only if all validations pass
+        return performDossierUpdate(actorId, traceId, dossierId);
+    }
+
+    private void checkToUpdate(String actorId, String traceId, String operation, String dossierId)
+            throws IncorrectEntityException {
+
+        tempListToCompare = newRelatedEntityInfo.stream()
+                .map(f -> new RelatedEntity(f.getId(), f.getAdministrationId(),
+                        f.getType().toUpperCase(Locale.ENGLISH)))
+                .collect(Collectors.toList());
+
+        RelatedEntity matchedTriplet = existingRelatedEntityInfo.stream()
+                .filter(existingEntity -> tempListToCompare.stream()
+                        .anyMatch(newEntity -> newEntity.getAdministrationId().equals(existingEntity.getAdministrationId())
+                                && newEntity.getId().equals(existingEntity.getId())
+                                && newEntity.getType().equals(existingEntity.getType())))
+                .findFirst()
+                .orElse(null);
+
+        if (matchedTriplet != null) {
+            log.error("Related entity already exists: {}", matchedTriplet);
+            throw new IncorrectEntityException(RELATED_ENTITY_INFO_ALREADY_PRESENT.name(), traceId,
+                    RELATED_ENTITY_INFO_ALREADY_PRESENT.getMessage(), matchedTriplet, actorId);
+        }
+    }
+
+    private List<String> getAllDocuments(String dossierId) {
+        // Call GetAllDocuments API
+        String url = "http://document-service/api/documents?dossierId=" + dossierId;
+        ResponseEntity<List<String>> response = restTemplate.exchange(
+                url,
+                HttpMethod.GET,
+                null,
+                new ParameterizedTypeReference<List<String>>() {
+                });
+
+        if (response.getStatusCode() == HttpStatus.OK && response.getBody() != null) {
+            return response.getBody();
+        }
+
+        return Collections.emptyList(); // No documents
+    }
+
+    private List<String> validateEntitiesInDocuments(List<String> documentIds, String dossierId, String traceId) {
+        List<String> documentIdsToUpdate = new ArrayList<>();
+
+        documentIds.forEach(documentId -> {
+            // Simulate a call to fetch related entities for the document
+            List<RelatedEntity> documentRelatedEntities = getDocumentRelatedEntities(documentId);
+
+            boolean allEntitiesExist = newRelatedEntityInfo.stream()
+                    .allMatch(newEntity -> documentRelatedEntities.stream()
+                            .anyMatch(existingEntity -> existingEntity.getAdministrationId()
+                                    .equals(newEntity.getAdministrationId())
+                                    && existingEntity.getId().equals(newEntity.getId())
+                                    && existingEntity.getType().equals(newEntity.getType())));
+
+            if (!allEntitiesExist) {
+                documentIdsToUpdate.add(documentId); // Add document that needs updating
+            }
+        });
+
+        return documentIdsToUpdate;
+    }
+
+    private List<RelatedEntity> getDocumentRelatedEntities(String documentId) {
+        // Simulate fetching related entities for a document
+        // This can be replaced with another API call if needed
+        return new ArrayList<>(); // Mocked empty list for now
+    }
+
+    private void callDocumentsApi(List<String> documentIds, List<RelatedEntity> relatedEntities, String dossierId,
+            String traceId) throws IncorrectEntityException {
+
+        String url = "http://document-service/api/documents/update";
+        Map<String, Object> request = new HashMap<>();
+        request.put("documentIds", documentIds);
+        request.put("relatedEntities", relatedEntities);
+
+        ResponseEntity<Void> response = restTemplate.postForEntity(url, request, Void.class);
+
+        if (!response.getStatusCode().is2xxSuccessful()) {
+            log.error("Failed to update documents for dossierId: {}", dossierId);
+            throw new IncorrectEntityException("DOCUMENT_UPDATE_FAILED", traceId, "Failed to update document entities",
+                    null, null);
+        }
+    }
+
+    private List<RelatedEntity> performDossierUpdate(String actorId, String traceId, String dossierId)
+            throws IncorrectEntityException {
+
+        List<RelatedEntity> relatedEntityList = new ArrayList<>();
+        relatedEntityList.addAll(existingRelatedEntityInfo);
+
+        newRelatedEntityInfo.forEach(relatedEntity -> {
+            RelatedEntity relatedEntityInfo = new RelatedEntity();
+            relatedEntityInfo.setAdministrationId(relatedEntity.getAdministrationId());
+            relatedEntityInfo.setType(relatedEntity.getType().toUpperCase(Locale.ENGLISH));
+            relatedEntityInfo.setId(StringUtils.stripStart(relatedEntity.getId(), "0"));
+
+            relatedEntityList.add(relatedEntityInfo);
+        });
+
+        return relatedEntityList;
+    }
+}

@@ -1,0 +1,118 @@
+import java.util.*;
+import java.util.stream.Collectors;
+import org.apache.commons.lang3.StringUtils;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+public class RelatedEntityInfoUpdaterHandler {
+
+    private static final Logger log = LoggerFactory.getLogger(RelatedEntityInfoUpdaterHandler.class);
+
+    private List<RelatedEntity> existingRelatedEntityInfo;
+
+    public RelatedEntityInfoUpdaterHandler(List<RelatedEntity> existingRelatedEntityInfo) {
+        this.existingRelatedEntityInfo = existingRelatedEntityInfo != null
+                ? existingRelatedEntityInfo
+                : new ArrayList<>();
+    }
+
+    /**
+     * Handles the addition of new related entities to the existing list.
+     *
+     * @param actorId   The ID of the actor performing the operation.
+     * @param traceId   The trace ID for tracking.
+     * @param dossierId The dossier ID for which entities are being updated.
+     * @param newEntities List of new entities to add.
+     * @return Updated list of related entities.
+     * @throws IncorrectEntityException if validation fails.
+     */
+    public List<RelatedEntity> update(String actorId, String traceId, String dossierId, List<RelatedEntity> newEntities)
+            throws IncorrectEntityException {
+
+        validateInput(newEntities, traceId, actorId);
+
+        List<RelatedEntity> normalizedEntities = newEntities.stream()
+                .map(this::normalizeEntity)
+                .collect(Collectors.toList());
+
+        for (RelatedEntity entity : normalizedEntities) {
+            if (existingRelatedEntityInfo.contains(entity)) {
+                log.error("Duplicate entity detected: {}", entity);
+                throw new IncorrectEntityException("ENTITY_ALREADY_EXISTS", traceId,
+                        "The entity already exists in the system.", entity, actorId);
+            }
+
+            log.info("Adding entity: {}", entity);
+            existingRelatedEntityInfo.add(entity);
+        }
+
+        if (existingRelatedEntityInfo.isEmpty()) {
+            throw new IncorrectEntityException("NO_RELATED_ENTITIES", traceId,
+                    "At least one related entity must exist.", null, actorId);
+        }
+
+        log.info("Successfully updated related entities. Total count: {}", existingRelatedEntityInfo.size());
+        return existingRelatedEntityInfo;
+    }
+
+    /**
+     * Fetches all existing related entities.
+     *
+     * @return List of all related entities.
+     */
+    public List<RelatedEntity> getAllRelatedEntities() {
+        return new ArrayList<>(existingRelatedEntityInfo);
+    }
+
+    /**
+     * Fetches related entities filtered by type.
+     *
+     * @param type The type of entities to filter.
+     * @return List of related entities matching the given type.
+     */
+    public List<RelatedEntity> getRelatedEntitiesByType(String type) {
+        if (type == null || type.isEmpty()) {
+            log.warn("Type is null or empty, returning all entities.");
+            return getAllRelatedEntities();
+        }
+
+        return existingRelatedEntityInfo.stream()
+                .filter(entity -> type.equalsIgnoreCase(entity.getType()))
+                .collect(Collectors.toList());
+    }
+
+    /**
+     * Validates input for addition operation.
+     *
+     * @param newEntities The list of new entities.
+     * @param traceId     The trace ID for tracking.
+     * @param actorId     The ID of the actor performing the operation.
+     * @throws IncorrectEntityException if input is invalid.
+     */
+    private void validateInput(List<RelatedEntity> newEntities, String traceId, String actorId)
+            throws IncorrectEntityException {
+        if (newEntities == null || newEntities.isEmpty()) {
+            throw new IncorrectEntityException("EMPTY_NEW_LIST", traceId,
+                    "No related entities provided for addition.", null, actorId);
+        }
+    }
+
+    /**
+     * Normalizes a related entity by ensuring attributes are properly formatted.
+     *
+     * @param entity The entity to normalize.
+     * @return A normalized RelatedEntity object.
+     */
+    private RelatedEntity normalizeEntity(RelatedEntity entity) {
+        RelatedEntity normalizedEntity = new RelatedEntity();
+
+        normalizedEntity.setAdministrationId(entity.getAdministrationId());
+        normalizedEntity.setType(entity.getType().toUpperCase(Locale.ENGLISH));
+        normalizedEntity.setId(
+                "2".equalsIgnoreCase(entity.getAdministrationId()) && "CUSTOMER".equalsIgnoreCase(entity.getType())
+                        ? StringUtils.stripStart(entity.getId(), "0")
+                        : entity.getId());
+
+        return normalizedEntity;
+    }
+}

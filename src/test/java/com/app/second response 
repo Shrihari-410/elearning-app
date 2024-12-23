@@ -1,0 +1,122 @@
+public List<RelatedEntity> getDossierRelatedEntities(String dossierId, String consumerId, String traceId) {
+    // Step 1: Fetch dossier metadata
+    Map<String, Object> metadata = dossierMetadataService.getDossierMetadata(dossierId, consumerId, traceId);
+
+    // Step 2: Extract related entities from metadata
+    List<RelatedEntity> existingDossierRelatedEntities = relatedEntityNuxeoHandler
+        .readRelatedEntityInfo(metadata);
+
+    return existingDossierRelatedEntities;
+}
+------------------------------
+
+public void addRelatedEntitiesToDossier(String dossierId, String consumerId, String traceId, List<RelatedEntity> incomingRelatedEntities) throws Exception {
+    // Step 1: Fetch all documents in the dossier
+    List<DocumentInDossier> allDocumentsList = getAllDocumentsService
+        .getAllDocuments(consumerId, dossierId, traceId)
+        .getDocumentInDossiers();
+
+    // Step 2: Read existing dossier-related entities
+    List<RelatedEntity> existingDossierRelatedEntities = relatedEntityNuxeoHandler
+        .readRelatedEntityInfo(dossierMetadataService.getDossierMetadata(dossierId, consumerId, traceId));
+
+    if (!existingDossierRelatedEntities.isEmpty()) {
+        log.info("Dossier already contains related entities, skipping dossier-level update.");
+        return; // No need to proceed if the dossier already has RE
+    }
+
+    // Step 3: Normalize incoming related entities
+    List<RelatedEntity> normalizedIncomingEntities = incomingRelatedEntities.stream()
+        .map(entity -> new RelatedEntity(
+            entity.getId(),
+            entity.getAdministrationId(),
+            entity.getType().toUpperCase(Locale.ENGLISH)))
+        .collect(Collectors.toList());
+
+    // Step 4: Initialize document update data
+    List<Map<String, List<RelatedEntity>>> docUpdateData = new ArrayList<>();
+
+    // Step 5: Iterate through each document to check conditions
+    for (DocumentInDossier document : allDocumentsList) {
+        List<RelatedEntity> existingDocumentEntities = document.getRelatedEntityInfo().stream()
+            .map(entity -> new RelatedEntity(
+                entity.getId(),
+                entity.getAdministrationId(),
+                entity.getType().toUpperCase(Locale.ENGLISH)))
+            .collect(Collectors.toList());
+
+        List<RelatedEntity> entitiesToAdd = new ArrayList<>();
+
+        for (RelatedEntity incomingEntity : normalizedIncomingEntities) {
+            boolean isEntityPresent = existingDocumentEntities.stream()
+                .anyMatch(existingEntity ->
+                    existingEntity.getAdministrationId().equals(incomingEntity.getAdministrationId()) &&
+                    existingEntity.getId().equals(incomingEntity.getId()) &&
+                    existingEntity.getType().equals(incomingEntity.getType()));
+
+            if (!isEntityPresent) {
+                entitiesToAdd.add(incomingEntity);
+            }
+        }
+
+        if (!entitiesToAdd.isEmpty()) {
+            Map<String, List<RelatedEntity>> documentData = new HashMap<>();
+            documentData.put(document.getId(), entitiesToAdd);
+            docUpdateData.add(documentData);
+        }
+    }
+
+    // Step 6: Call Document API if updates are required
+    if (!docUpdateData.isEmpty()) {
+        boolean allDocumentsUpdated = callDocumentAPI(docUpdateData, traceId);
+
+        if (!allDocumentsUpdated) {
+            throw new Exception("Failed to update related entities in some documents. Operation aborted.");
+        }
+    }
+
+    // Step 7: Update dossier after successful document updates
+    updateDossierWithNewEntities(dossierId, normalizedIncomingEntities);
+}
+
+private boolean callDocumentAPI(List<Map<String, List<RelatedEntity>>> docUpdateData, String traceId) {
+    try {
+        String url = "http://document-service/api/documents/update-related-entities";
+        HttpHeaders headers = new HttpHeaders();
+        headers.add("Trace-Id", traceId);
+
+        Map<String, Object> requestBody = new HashMap<>();
+        requestBody.put("documentUpdates", docUpdateData);
+
+        HttpEntity<Map<String, Object>> request = new HttpEntity<>(requestBody, headers);
+
+        ResponseEntity<Void> response = restTemplate.exchange(
+            url,
+            HttpMethod.POST,
+            request,
+            Void.class);
+
+        return response.getStatusCode().is2xxSuccessful();
+    } catch (Exception e) {
+        log.error("Error calling Document API: {}", e.getMessage());
+        return false;
+    }
+}
+
+private void updateDossierWithNewEntities(String dossierId, List<RelatedEntity> relatedEntities) {
+    String url = String.format("http://dossier-service/api/dossiers/%s/update-related-entities", dossierId);
+    HttpHeaders headers = new HttpHeaders();
+
+    HttpEntity<List<RelatedEntity>> request = new HttpEntity<>(relatedEntities, headers);
+
+    ResponseEntity<Void> response = restTemplate.exchange(
+        url,
+        HttpMethod.PUT,
+        request,
+        Void.class);
+
+    if (!response.getStatusCode().is2xxSuccessful()) {
+        log.error("Failed to update dossier: {}", dossierId);
+        throw new RuntimeException("Dossier update failed");
+    }
+}

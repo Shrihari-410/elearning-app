@@ -116,3 +116,150 @@ private boolean callDocumentAPI(List<Map<String, List<RelatedEntity>>> docUpdate
         return false;
     }
 }
+
+
+
+
+
+
+import static org.mockito.Mockito.*;
+import static org.junit.jupiter.api.Assertions.*;
+
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
+import org.mockito.MockitoAnnotations;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.client.RestTemplate;
+
+import java.util.*;
+
+public class RelatedEntityAdditionServiceTest {
+
+    @InjectMocks
+    private RelatedEntityAdditionService relatedEntityAdditionService;
+
+    @Mock
+    private GetAllDocumentsService getAllDocumentsService;
+
+    @Mock
+    private RelatedEntityNuxeoHandler relatedEntityNuxeoHandler;
+
+    @Mock
+    private DossierMetadataService dossierMetadataService;
+
+    @Mock
+    private RestTemplate restTemplate;
+
+    private String dossierId;
+    private String consumerId;
+    private String traceId;
+
+    @BeforeEach
+    public void setUp() {
+        MockitoAnnotations.openMocks(this);
+        dossierId = "12345";
+        consumerId = "consumer1";
+        traceId = "trace123";
+    }
+
+    @Test
+    public void testAddRelatedEntitiesToDossier_NoExistingEntities_AddAll() throws Exception {
+        // Arrange
+        when(getAllDocumentsService.getAllDocuments(consumerId, dossierId, traceId))
+                .thenReturn(new AllDocumentsResponse(Collections.emptyList()));
+        when(relatedEntityNuxeoHandler.readRelatedEntityInfo(any())).thenReturn(Collections.emptyList());
+
+        List<RelatedEntity> incomingRelatedEntities = List.of(
+                new RelatedEntity("1", "admin1", "TYPE1"),
+                new RelatedEntity("2", "admin2", "TYPE2")
+        );
+
+        ResponseEntity<Void> mockResponse = new ResponseEntity<>(HttpStatus.OK);
+        when(restTemplate.exchange(anyString(), eq(HttpMethod.POST), any(), eq(Void.class)))
+                .thenReturn(mockResponse);
+
+        // Act
+        relatedEntityAdditionService.addRelatedEntitiesToDossier(dossierId, consumerId, traceId, incomingRelatedEntities);
+
+        // Assert
+        verify(restTemplate, times(1)).exchange(anyString(), eq(HttpMethod.POST), any(), eq(Void.class));
+        // Verify additional calls if needed
+    }
+
+    @Test
+    public void testAddRelatedEntitiesToDossier_WithExistingEntities_AddOnlyNew() throws Exception {
+        // Arrange
+        DocumentInDossier document = new DocumentInDossier("doc1", List.of(
+                new RelatedEntity("1", "admin1", "TYPE1")
+        ));
+        when(getAllDocumentsService.getAllDocuments(consumerId, dossierId, traceId))
+                .thenReturn(new AllDocumentsResponse(List.of(document)));
+        when(relatedEntityNuxeoHandler.readRelatedEntityInfo(any()))
+                .thenReturn(Collections.emptyList());
+
+        List<RelatedEntity> incomingRelatedEntities = List.of(
+                new RelatedEntity("1", "admin1", "TYPE1"), // Duplicate
+                new RelatedEntity("2", "admin2", "TYPE2")  // New
+        );
+
+        ResponseEntity<Void> mockResponse = new ResponseEntity<>(HttpStatus.OK);
+        when(restTemplate.exchange(anyString(), eq(HttpMethod.POST), any(), eq(Void.class)))
+                .thenReturn(mockResponse);
+
+        // Act
+        relatedEntityAdditionService.addRelatedEntitiesToDossier(dossierId, consumerId, traceId, incomingRelatedEntities);
+
+        // Assert
+        verify(restTemplate, times(1)).exchange(anyString(), eq(HttpMethod.POST), any(), eq(Void.class));
+    }
+
+    @Test
+    public void testAddRelatedEntitiesToDossier_DocumentApiFailure_ThrowsException() {
+        // Arrange
+        DocumentInDossier document = new DocumentInDossier("doc1", List.of(
+                new RelatedEntity("1", "admin1", "TYPE1")
+        ));
+        when(getAllDocumentsService.getAllDocuments(consumerId, dossierId, traceId))
+                .thenReturn(new AllDocumentsResponse(List.of(document)));
+        when(relatedEntityNuxeoHandler.readRelatedEntityInfo(any()))
+                .thenReturn(Collections.emptyList());
+
+        List<RelatedEntity> incomingRelatedEntities = List.of(
+                new RelatedEntity("2", "admin2", "TYPE2")
+        );
+
+        when(restTemplate.exchange(anyString(), eq(HttpMethod.POST), any(), eq(Void.class)))
+                .thenThrow(new RuntimeException("Document API failure"));
+
+        // Act & Assert
+        Exception exception = assertThrows(Exception.class, () ->
+                relatedEntityAdditionService.addRelatedEntitiesToDossier(dossierId, consumerId, traceId, incomingRelatedEntities));
+        assertEquals("Failed to update related entities in some documents. Operation aborted.", exception.getMessage());
+    }
+
+    @Test
+    public void testAddRelatedEntitiesToDossier_NoNewEntities_SkipUpdate() throws Exception {
+        // Arrange
+        DocumentInDossier document = new DocumentInDossier("doc1", List.of(
+                new RelatedEntity("1", "admin1", "TYPE1")
+        ));
+        when(getAllDocumentsService.getAllDocuments(consumerId, dossierId, traceId))
+                .thenReturn(new AllDocumentsResponse(List.of(document)));
+        when(relatedEntityNuxeoHandler.readRelatedEntityInfo(any()))
+                .thenReturn(Collections.emptyList());
+
+        List<RelatedEntity> incomingRelatedEntities = List.of(
+                new RelatedEntity("1", "admin1", "TYPE1") // Duplicate
+        );
+
+        // Act
+        relatedEntityAdditionService.addRelatedEntitiesToDossier(dossierId, consumerId, traceId, incomingRelatedEntities);
+
+        // Assert
+        verify(restTemplate, never()).exchange(anyString(), eq(HttpMethod.POST), any(), eq(Void.class));
+        log.info("No new entities to add. Skipped document API call.");
+    }
+}

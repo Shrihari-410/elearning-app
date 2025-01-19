@@ -1,0 +1,152 @@
+public void addRelatedEntityToDossier(
+        String dossierId,
+        String consumerId,
+        String traceId,
+        RelatedEntity incomingRelatedEntity) throws Exception {
+
+    // Step 1: Validate incoming RelatedEntity
+    if (!validateIncomingRelatedEntity(incomingRelatedEntity)) {
+        log.error("Validation failed for RelatedEntity: {}", incomingRelatedEntity);
+        throw new IllegalArgumentException("Invalid RelatedEntity provided.");
+    }
+
+    // Ensure type is CUSTOMER for this MVP
+    if (!"CUSTOMER".equalsIgnoreCase(incomingRelatedEntity.getType())) {
+        log.info("Ignoring RelatedEntity addition as type is not CUSTOMER.");
+        return;
+    }
+
+    // Step 2: Fetch dossier metadata and existing related entities
+    List<RelatedEntity> existingDossierRelatedEntities = relatedEntityNuxeoHandler
+            .readRelatedEntityInfo(dossierMetadataService.getDossierMetadata(dossierId, consumerId, traceId));
+
+    // Step 3: Check if dossier already contains the same RelatedEntity
+    boolean isInDossier = existingDossierRelatedEntities.stream()
+            .anyMatch(existingEntity -> existingEntity.getAdministrationId().equals(incomingRelatedEntity.getAdministrationId())
+                    && existingEntity.getId().equals(incomingRelatedEntity.getId())
+                    && existingEntity.getType().equalsIgnoreCase(incomingRelatedEntity.getType()));
+
+    if (isInDossier) {
+        log.info("RelatedEntity already exists in the dossier. No addition performed.");
+        throw new IllegalStateException("Dossier already contains a RelatedEntity of type 'CUSTOMER'.");
+    }
+
+    // Step 4: Fetch all documents in the dossier
+    List<DocumentInDossier> allDocumentsList = getAllDocumentsService
+            .getAllDocuments(consumerId, dossierId, traceId)
+            .getDocumentInDossiers();
+
+    // Initialize flag to track if Document API needs to be called
+    boolean documentApiCallRequired = false;
+
+    // Step 5: Validate each document for the RelatedEntity
+    for (DocumentInDossier document : allDocumentsList) {
+        List<RelatedEntity> existingDocumentEntities = document.getRelatedEntityInfo();
+
+        boolean isInDocument = existingDocumentEntities.stream()
+                .anyMatch(existingEntity -> existingEntity.getAdministrationId().equals(incomingRelatedEntity.getAdministrationId())
+                        && existingEntity.getId().equals(incomingRelatedEntity.getId())
+                        && existingEntity.getType().equalsIgnoreCase(incomingRelatedEntity.getType()));
+
+        if (!isInDocument) {
+            // RelatedEntity not present in the document, prepare to call Document API
+            documentApiCallRequired = true;
+            break;
+        }
+    }
+
+    // Step 6: Call Document API if required
+    if (documentApiCallRequired) {
+        log.info("RelatedEntity not found in some documents. Calling Document API to add.");
+        boolean documentApiSuccess = callDocumentAPI(dossierId, traceId, incomingRelatedEntity);
+
+        if (!documentApiSuccess) {
+            throw new Exception("Document API failed. Cannot proceed with dossier update.");
+        }
+    } else {
+        log.info("All documents already contain the RelatedEntity. Skipping Document API call.");
+    }
+
+    // Step 7: Update dossier with the incoming RelatedEntity
+    updateDossierWithNewEntity(dossierId, incomingRelatedEntity);
+    log.info("RelatedEntity added to dossier successfully.");
+}
+
+/**
+ * Validates the incoming RelatedEntity for basic checks.
+ */
+private boolean validateIncomingRelatedEntity(RelatedEntity incomingRelatedEntity) {
+    if (incomingRelatedEntity == null) {
+        log.error("Incoming RelatedEntity is null.");
+        return false;
+    }
+
+    if (incomingRelatedEntity.getId() == null || incomingRelatedEntity.getId().trim().isEmpty()) {
+        log.error("RelatedEntity 'id' is null or empty.");
+        return false;
+    }
+
+    if (incomingRelatedEntity.getAdministrationId() == null || incomingRelatedEntity.getAdministrationId().trim().isEmpty()) {
+        log.error("RelatedEntity 'administrationId' is null or empty.");
+        return false;
+    }
+
+    if (incomingRelatedEntity.getType() == null || incomingRelatedEntity.getType().trim().isEmpty()) {
+        log.error("RelatedEntity 'type' is null or empty.");
+        return false;
+    }
+
+    return true;
+}
+
+/**
+ * Calls the Document API to add the incoming RelatedEntity to applicable documents.
+ */
+private boolean callDocumentAPI(String dossierId, String traceId, RelatedEntity incomingRelatedEntity) {
+    try {
+        String url = "http://document-service/api/documents/update-related-entity";
+        HttpHeaders headers = new HttpHeaders();
+        headers.add("Trace-Id", traceId);
+
+        Map<String, Object> requestBody = new HashMap<>();
+        requestBody.put("dossierId", dossierId);
+        requestBody.put("relatedEntity", incomingRelatedEntity);
+
+        HttpEntity<Map<String, Object>> request = new HttpEntity<>(requestBody, headers);
+
+        ResponseEntity<Void> response = restTemplate.exchange(
+                url,
+                HttpMethod.POST,
+                request,
+                Void.class);
+
+        if (!response.getStatusCode().is2xxSuccessful()) {
+            log.error("Failed to update documents with the RelatedEntity. HTTP Status: {}", response.getStatusCode());
+            return false;
+        }
+
+        log.info("Document API called successfully for dossierId: {} and RelatedEntity: {}", dossierId, incomingRelatedEntity);
+        return true;
+    } catch (Exception e) {
+        log.error("Error calling Document API: {}", e.getMessage());
+        return false;
+    }
+}
+
+/**
+ * Updates the dossier with the incoming RelatedEntity.
+ */
+private void updateDossierWithNewEntity(String dossierId, RelatedEntity incomingRelatedEntity) {
+    try {
+        // Implement the logic to update the dossier metadata with the new RelatedEntity
+        log.info("Updating dossier {} with RelatedEntity: {}", dossierId, incomingRelatedEntity);
+
+        // Example pseudo-code for updating the dossier metadata:
+        // dossierMetadataService.updateDossierMetadata(dossierId, incomingRelatedEntity);
+
+        log.info("Dossier updated with RelatedEntity: {}", incomingRelatedEntity);
+    } catch (Exception e) {
+        log.error("Failed to update dossier with RelatedEntity: {}", e.getMessage());
+        throw new RuntimeException("Failed to update dossier.");
+    }
+}

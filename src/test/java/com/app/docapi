@@ -1,0 +1,164 @@
+@Service
+@Slf4j
+public class DocumentService {
+
+    private final RestTemplate restTemplate;
+    private final DriHeaderSetting driHeaderSetting;
+
+    @Value("${document-service.url:http://document-service/documents/update-related-entity/}")
+    private String driUrl;
+
+    @Autowired
+    public DocumentService(RestTemplate restTemplate, DriHeaderSetting driHeaderSetting) {
+        this.restTemplate = restTemplate;
+        this.driHeaderSetting = driHeaderSetting;
+    }
+
+    public boolean callDocumentAPI(String traceId, String consumerId, String documentId, RelatedEntity incomingRelatedEntity) {
+        try {
+            if (incomingRelatedEntity == null || traceId == null || consumerId == null || documentId == null) {
+                log.error("Invalid input parameters for Document API call. TraceId: {}, ConsumerId: {}, DocumentId: {}, RelatedEntity: {}",
+                        traceId, consumerId, documentId, incomingRelatedEntity);
+                return false;
+            }
+
+            // Prepare the RelatedEntity payload
+            RelatedEntity relatedEntityInfo = new RelatedEntity();
+            relatedEntityInfo.setAdministrationId(incomingRelatedEntity.getAdministrationId());
+            relatedEntityInfo.setType(incomingRelatedEntity.getType().toUpperCase(Locale.ENGLISH));
+            relatedEntityInfo.setId(incomingRelatedEntity.getId());
+
+            // Prepare the HTTP request
+            HttpEntity<?> httpRequest = new HttpEntity<>(
+                    relatedEntityInfo,
+                    driHeaderSetting.settingDriHeader(traceId, consumerId, documentId)
+            );
+
+            // Perform the REST call
+            ResponseEntity<RelatedEntity> response = restTemplate.exchange(
+                    driUrl,
+                    HttpMethod.POST,
+                    httpRequest,
+                    RelatedEntity.class
+            );
+
+            if (response.getStatusCode().is2xxSuccessful()) {
+                log.info("Document API called successfully for documentId: {} and RelatedEntity: {}", documentId, incomingRelatedEntity);
+                return true;
+            } else {
+                log.error("Failed to update documents with the RelatedEntity. HTTP Status: {}", response.getStatusCode());
+                return false;
+            }
+        } catch (RuntimeException e) {
+            log.error("The Document API call failed for consumer id {}, traceId {}, and documentId {} due to exception: {}",
+                    consumerId, traceId, documentId, e.getMessage(), e);
+            return false;
+        }
+    }
+}
+========= junits ==========
+@SpringBootTest
+@RunWith(MockitoJUnitRunner.class)
+public class DocumentServiceTest {
+
+    @InjectMocks
+    private DocumentService documentService;
+
+    @Mock
+    private RestTemplate restTemplate;
+
+    @Mock
+    private DriHeaderSetting driHeaderSetting;
+
+    @Value("${document-service.url:http://document-service/documents/update-related-entity/}")
+    private String driUrl;
+
+    private static final String TRACE_ID = "trace123";
+    private static final String CONSUMER_ID = "consumer123";
+    private static final String DOCUMENT_ID = "doc123";
+
+    private RelatedEntity validEntity;
+
+    @Before
+    public void setUp() {
+        validEntity = new RelatedEntity("12345", "1", "CUSTOMER");
+    }
+
+    @Test
+    public void testCallDocumentAPI_Success() {
+        // Mocking
+        HttpEntity<?> httpRequest = new HttpEntity<>(validEntity, null);
+        when(driHeaderSetting.settingDriHeader(TRACE_ID, CONSUMER_ID, DOCUMENT_ID)).thenReturn(null);
+        when(restTemplate.exchange(
+                eq(driUrl),
+                eq(HttpMethod.POST),
+                any(HttpEntity.class),
+                eq(RelatedEntity.class))
+        ).thenReturn(new ResponseEntity<>(HttpStatus.OK));
+
+        // Act
+        boolean result = documentService.callDocumentAPI(TRACE_ID, CONSUMER_ID, DOCUMENT_ID, validEntity);
+
+        // Assert
+        assertTrue(result);
+        verify(restTemplate, times(1)).exchange(anyString(), any(HttpMethod.class), any(HttpEntity.class), eq(RelatedEntity.class));
+    }
+
+    @Test
+    public void testCallDocumentAPI_FailureStatus() {
+        // Mocking
+        when(driHeaderSetting.settingDriHeader(TRACE_ID, CONSUMER_ID, DOCUMENT_ID)).thenReturn(null);
+        when(restTemplate.exchange(
+                eq(driUrl),
+                eq(HttpMethod.POST),
+                any(HttpEntity.class),
+                eq(RelatedEntity.class))
+        ).thenReturn(new ResponseEntity<>(HttpStatus.BAD_REQUEST));
+
+        // Act
+        boolean result = documentService.callDocumentAPI(TRACE_ID, CONSUMER_ID, DOCUMENT_ID, validEntity);
+
+        // Assert
+        assertFalse(result);
+    }
+
+    @Test
+    public void testCallDocumentAPI_NullInputs() {
+        // Act
+        boolean result = documentService.callDocumentAPI(null, null, null, null);
+
+        // Assert
+        assertFalse(result);
+        verify(restTemplate, never()).exchange(anyString(), any(HttpMethod.class), any(HttpEntity.class), eq(RelatedEntity.class));
+    }
+
+    @Test
+    public void testCallDocumentAPI_RuntimeException() {
+        // Mocking
+        when(driHeaderSetting.settingDriHeader(TRACE_ID, CONSUMER_ID, DOCUMENT_ID)).thenReturn(null);
+        when(restTemplate.exchange(
+                eq(driUrl),
+                eq(HttpMethod.POST),
+                any(HttpEntity.class),
+                eq(RelatedEntity.class))
+        ).thenThrow(new RuntimeException("RestTemplate exception"));
+
+        // Act
+        boolean result = documentService.callDocumentAPI(TRACE_ID, CONSUMER_ID, DOCUMENT_ID, validEntity);
+
+        // Assert
+        assertFalse(result);
+        verify(restTemplate, times(1)).exchange(anyString(), any(HttpMethod.class), any(HttpEntity.class), eq(RelatedEntity.class));
+    }
+
+    @Test
+    public void testCallDocumentAPI_InvalidEntity() {
+        // Act
+        RelatedEntity invalidEntity = new RelatedEntity(null, null, null);
+        boolean result = documentService.callDocumentAPI(TRACE_ID, CONSUMER_ID, DOCUMENT_ID, invalidEntity);
+
+        // Assert
+        assertFalse(result);
+        verify(restTemplate, never()).exchange(anyString(), any(HttpMethod.class), any(HttpEntity.class), eq(RelatedEntity.class));
+    }
+}

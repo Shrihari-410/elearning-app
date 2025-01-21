@@ -1,0 +1,105 @@
+public class RelatedEntityInfoAddHandler {
+
+    private final List<RelatedEntity> existingRelatedEntityInfo;
+    private final List<RelatedEntity> newRelatedEntityInfo;
+    private final DocumentService documentService;
+
+    public RelatedEntityInfoAddHandler(List<RelatedEntity> existingRelatedEntityInfo,
+                                       List<RelatedEntity> newRelatedEntityInfo,
+                                       DocumentService documentService) {
+        if (existingRelatedEntityInfo == null || newRelatedEntityInfo == null || documentService == null) {
+            throw new IllegalArgumentException("Constructor parameters cannot be null");
+        }
+        this.existingRelatedEntityInfo = existingRelatedEntityInfo;
+        this.newRelatedEntityInfo = newRelatedEntityInfo;
+        this.documentService = documentService;
+    }
+
+    public List<RelatedEntity> update(String actorId, String traceId, String operation, String dossierId,
+                                       List<DocumentInDossier> allDocumentsList) throws Exception {
+        RelatedEntity filteredEntity = validateDossierRelatedEntities();
+
+        if (filteredEntity != null) {
+            boolean documentsUpdated = checkForDocumentsUpdate(traceId, actorId, dossierId, allDocumentsList);
+            if (!documentsUpdated) {
+                throw new Exception("Failed to update documents. Aborting dossier update.");
+            }
+
+            List<RelatedEntity> relatedEntityList = new ArrayList<>();
+
+            for (RelatedEntity relatedEntity : newRelatedEntityInfo) {
+                RelatedEntity relatedEntityInfo = new RelatedEntity();
+                relatedEntityInfo.setAdministrationId(relatedEntity.getAdministrationId());
+                relatedEntityInfo.setType(relatedEntity.getType().toUpperCase(Locale.ENGLISH));
+                relatedEntityInfo.setId(
+                        "2".equalsIgnoreCase(relatedEntity.getAdministrationId()) && "CUSTOMER".equalsIgnoreCase(relatedEntity.getType())
+                                ? StringUtils.stripStart(relatedEntity.getId(), "0")
+                                : relatedEntity.getId()
+                );
+
+                if ("ADDITION".equalsIgnoreCase(operation)) {
+                    relatedEntityList.add(relatedEntityInfo);
+                }
+            }
+
+            if (relatedEntityList.isEmpty()) {
+                throw new IncorrectEntityException("AT_LEAST_ONE_RELATED_ENTITY_SHOULD_EXIST", traceId,
+                        "At least one related entity should exist.", null, actorId);
+            }
+
+            return relatedEntityList;
+        }
+
+        throw new IncorrectEntityException("RELATED_ENTITY_INFO_ALREADY_PRESENT", traceId,
+                "Related entity info is already present.", null, actorId);
+    }
+
+    private boolean checkForDocumentsUpdate(String traceId, String actorId, String dossierId, List<DocumentInDossier> allDocumentsList) throws Exception {
+        if (allDocumentsList == null || allDocumentsList.isEmpty()) {
+            return true; // No documents to update
+        }
+
+        RelatedEntity incomingRelatedEntity = newRelatedEntityInfo.stream().findFirst().orElse(null);
+        if (incomingRelatedEntity == null) {
+            throw new IllegalArgumentException("Incoming related entity cannot be null");
+        }
+
+        for (DocumentInDossier document : allDocumentsList) {
+            List<RelatedEntity> existingDocumentEntities = document.getRelatedEntityInfo().stream()
+                    .map(entity -> new RelatedEntity(
+                            entity.getId(),
+                            entity.getAdministrationId(),
+                            entity.getType().toUpperCase(Locale.ENGLISH)))
+                    .collect(Collectors.toList());
+
+            boolean isInDocument = existingDocumentEntities.stream().anyMatch(existingEntity ->
+                    existingEntity.getAdministrationId().equals(incomingRelatedEntity.getAdministrationId()) &&
+                            existingEntity.getId().equals(incomingRelatedEntity.getId()) &&
+                            existingEntity.getType().equalsIgnoreCase(incomingRelatedEntity.getType()));
+
+            if (!isInDocument) {
+                boolean documentApiSuccess = documentService.callDocumentAPI(traceId, actorId, document.getId(), incomingRelatedEntity);
+                if (!documentApiSuccess) {
+                    return false;
+                }
+            }
+        }
+
+        return true;
+    }
+
+    private RelatedEntity validateDossierRelatedEntities() {
+        RelatedEntity singleIncomingEntity = newRelatedEntityInfo.stream().findFirst().orElse(null);
+
+        if (singleIncomingEntity == null) {
+            return null;
+        }
+
+        boolean isValid = existingRelatedEntityInfo.stream().noneMatch(existingEntity ->
+                existingEntity.getAdministrationId().equals(singleIncomingEntity.getAdministrationId()) &&
+                        existingEntity.getType().equals(singleIncomingEntity.getType()) &&
+                        existingEntity.getId().equals(singleIncomingEntity.getId()));
+
+        return isValid ? singleIncomingEntity : null;
+    }
+}

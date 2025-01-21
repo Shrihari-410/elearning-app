@@ -1,0 +1,208 @@
+junits for controller class 
+
+@WebMvcTest(RelatedEntityController.class)
+@ExtendWith(SpringExtension.class)
+class RelatedEntityControllerTest {
+
+    @Autowired
+    private MockMvc mockMvc;
+
+    @MockBean
+    private RelatedEntityAddService relatedEntityAddService;
+
+    @Test
+    void testEntityAdds_Success() throws Exception {
+        RelatedEntity relatedEntity = new RelatedEntity();
+        relatedEntity.setId("123");
+        relatedEntity.setType("CUSTOMER");
+        relatedEntity.setAdministrationId("ADMIN1");
+
+        doNothing().when(relatedEntityAddService).addRelatedEntity(
+            anyString(), anyString(), anyString(), any(RelatedEntity.class), anyString());
+
+        mockMvc.perform(post("/dos/add/")
+                .contentType(MediaType.APPLICATION_JSON)
+                .header("Trace-Id", "trace123")
+                .header("Consumer-Id", "consumer123")
+                .content(new ObjectMapper().writeValueAsString(relatedEntity)))
+            .andExpect(status().isNoContent());
+    }
+
+    @Test
+    void testEntityAdds_ConstraintViolationException() throws Exception {
+        RelatedEntity relatedEntity = new RelatedEntity();
+        relatedEntity.setId("123");
+        relatedEntity.setType("CUSTOMER");
+        relatedEntity.setAdministrationId("ADMIN1");
+
+        doThrow(new ConstraintViolationException("Violation: INVALID_ENTITY", null))
+            .when(relatedEntityAddService).addRelatedEntity(anyString(), anyString(), anyString(), any(), anyString());
+
+        mockMvc.perform(post("/dos/add/")
+                .contentType(MediaType.APPLICATION_JSON)
+                .header("Trace-Id", "trace123")
+                .header("Consumer-Id", "consumer123")
+                .content(new ObjectMapper().writeValueAsString(relatedEntity)))
+            .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void testEntityAdds_Exception() throws Exception {
+        RelatedEntity relatedEntity = new RelatedEntity();
+        relatedEntity.setId("123");
+        relatedEntity.setType("CUSTOMER");
+        relatedEntity.setAdministrationId("ADMIN1");
+
+        doThrow(new RuntimeException("Internal Error"))
+            .when(relatedEntityAddService).addRelatedEntity(anyString(), anyString(), anyString(), any(), anyString());
+
+        mockMvc.perform(post("/dos/add/")
+                .contentType(MediaType.APPLICATION_JSON)
+                .header("Trace-Id", "trace123")
+                .header("Consumer-Id", "consumer123")
+                .content(new ObjectMapper().writeValueAsString(relatedEntity)))
+            .andExpect(status().isInternalServerError());
+    }
+}
+
+junits for service impl
+@ExtendWith(MockitoExtension.class)
+class RelatedEntityAddServiceImplTest {
+
+    @InjectMocks
+    private RelatedEntityAddServiceImpl relatedEntityAddService;
+
+    @Mock
+    private GetDossierESHandler getDossierESHandler;
+
+    @Mock
+    private ResourceMapper resourceMapper;
+
+    @Mock
+    private AllowedRelatedEntityInfoValidator allowedRelatedEntityInfoValidator;
+
+    @Mock
+    private MargaService margaService;
+
+    @Mock
+    private RelatedEntityHandler relatedEntityHandler;
+
+    @Mock
+    private AuditService auditService;
+
+    @Mock
+    private RelatedEntityNuxeoHandler relatedEntityNuxeoHandler;
+
+    @Mock
+    private GetAllDocumentsService getAllDocumentsService;
+
+    @Test
+    void testAddRelatedEntity_Success() throws Exception {
+        RelatedEntity relatedEntity = new RelatedEntity();
+        relatedEntity.setId("123");
+        relatedEntity.setType("CUSTOMER");
+        relatedEntity.setAdministrationId("ADMIN1");
+
+        when(getDossierESHandler.verifyDossierExists(anyString(), anyString(), anyString(), anyString(), anyString()))
+            .thenReturn(mock(SearchHit.class));
+
+        when(margaService.getAuthorizationDecision(any(), anyString(), anyString()))
+            .thenReturn(new Decision("allow"));
+
+        doNothing().when(allowedRelatedEntityInfoValidator)
+            .isValidRelatedEntity(anyString(), anyString(), anyString(), any(RelatedEntity.class));
+
+        doNothing().when(auditService).auditRequest(anyString(), anyString(), anyString(), anyString());
+
+        relatedEntityAddService.addRelatedEntity("consumerId", "traceId", "dossierId", relatedEntity, "ADDITION");
+
+        verify(auditService, times(1)).auditRequest(anyString(), anyString(), anyString(), anyString());
+    }
+
+    @Test
+    void testAddRelatedEntity_DossierClosed() {
+        Map<String, Object> metadata = new HashMap<>();
+        metadata.put("DOSSIER_STATUS", "CLOSED");
+
+        RelatedEntity relatedEntity = new RelatedEntity();
+        relatedEntity.setId("123");
+        relatedEntity.setType("CUSTOMER");
+        relatedEntity.setAdministrationId("ADMIN1");
+
+        SearchHit searchHit = mock(SearchHit.class);
+        when(searchHit.getSourceAsMap()).thenReturn(metadata);
+
+        when(getDossierESHandler.verifyDossierExists(anyString(), anyString(), anyString(), anyString(), anyString()))
+            .thenReturn(searchHit);
+
+        Exception exception = assertThrows(BadRequestException.class, () ->
+            relatedEntityAddService.addRelatedEntity("consumerId", "traceId", "dossierId", relatedEntity, "ADDITION"));
+
+        assertEquals("DOSSIER_ALREADY_CLOSED", exception.getMessage());
+    }
+
+    @Test
+    void testAddRelatedEntity_AccessDenied() {
+        RelatedEntity relatedEntity = new RelatedEntity();
+        relatedEntity.setId("123");
+        relatedEntity.setType("CUSTOMER");
+        relatedEntity.setAdministrationId("ADMIN1");
+
+        when(margaService.getAuthorizationDecision(any(), anyString(), anyString()))
+            .thenReturn(new Decision("deny"));
+
+        Exception exception = assertThrows(ForbiddenRequestException.class, () ->
+            relatedEntityAddService.addRelatedEntity("consumerId", "traceId", "dossierId", relatedEntity, "ADDITION"));
+
+        assertEquals("ACCESS_DENIED", exception.getMessage());
+    }
+}
+
+junits for infovalidator
+
+@ExtendWith(MockitoExtension.class)
+class AllowedRelatedEntityInfoValidatorTest {
+
+    @InjectMocks
+    private AllowedRelatedEntityInfoValidator validator;
+
+    @Mock
+    private AdministrationServiceImpl administrationService;
+
+    @Test
+    void testIsValidRelatedEntity_Success() {
+        RelatedEntity relatedEntity = new RelatedEntity();
+        relatedEntity.setType("CUSTOMER");
+        relatedEntity.setAdministrationId("ADMIN1");
+
+        when(administrationService.getRelatedEntityAdministrations())
+            .thenReturn(Map.of("customer", List.of("ADMIN1", "ADMIN2")));
+
+        boolean isValid = validator.isValidRelatedEntity("consumerId", "traceId", "dossierId", relatedEntity);
+
+        assertTrue(isValid);
+    }
+
+    @Test
+    void testIsValidRelatedEntity_MissingRelatedEntity() {
+        Exception exception = assertThrows(BadRequestException.class, () ->
+            validator.isValidRelatedEntity("consumerId", "traceId", "dossierId", null));
+
+        assertEquals("RELATED_ENTITY_INFO_MISSING", exception.getMessage());
+    }
+
+    @Test
+    void testDoValidate_InvalidAdministrationId() {
+        RelatedEntity relatedEntity = new RelatedEntity();
+        relatedEntity.setType("CUSTOMER");
+        relatedEntity.setAdministrationId("INVALID_ADMIN");
+
+        when(administrationService.getRelatedEntityAdministrations())
+            .thenReturn(Map.of("customer", List.of("ADMIN1", "ADMIN2")));
+
+        Exception exception = assertThrows(IncorrectEntityException.class, () ->
+            validator.doValidate(relatedEntity, "traceId", "consumerId"));
+
+        assertEquals("RELATED_ENTITY_INFO_ADMINISTRATION_ID_INVALID", exception.getMessage());
+    }
+}

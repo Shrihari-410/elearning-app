@@ -1,0 +1,272 @@
+@RestController
+@RequestMapping("/api/dossiers")
+public class DossierController {
+
+    private final DossierService dossierService;
+
+    public DossierController(DossierService dossierService) {
+        this.dossierService = dossierService;
+    }
+
+    @PostMapping("/{dossierId}/related-entities")
+    public ResponseEntity<Void> addRelatedEntity(
+            @PathVariable String dossierId,
+            @RequestHeader("consumerId") String consumerId,
+            @RequestHeader("traceId") String traceId,
+            @RequestBody RelatedEntity relatedEntity) {
+        try {
+            dossierService.addRelatedEntityToDossier(dossierId, consumerId, traceId, relatedEntity);
+            return ResponseEntity.ok().build();
+        } catch (IllegalArgumentException ex) {
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(null);
+        } catch (Exception ex) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build();
+        }
+    }
+}
+=====≠===================
+@WebMvcTest(DossierController.class)
+public class DossierControllerTest {
+
+    @Autowired
+    private MockMvc mockMvc;
+
+    @MockBean
+    private DossierService dossierService;
+
+    @Test
+    public void testAddRelatedEntity_Success() throws Exception {
+        String dossierId = "dossier123";
+        String consumerId = "consumer456";
+        String traceId = "trace789";
+        RelatedEntity relatedEntity = new RelatedEntity("entity1", "admin123", "CUSTOMER");
+
+        mockMvc.perform(post("/api/dossiers/{dossierId}/related-entities", dossierId)
+                .header("consumerId", consumerId)
+                .header("traceId", traceId)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(new ObjectMapper().writeValueAsString(relatedEntity)))
+                .andExpect(status().isOk());
+
+        verify(dossierService, times(1))
+                .addRelatedEntityToDossier(dossierId, consumerId, traceId, relatedEntity);
+    }
+
+    @Test
+    public void testAddRelatedEntity_BadRequest() throws Exception {
+        String dossierId = "dossier123";
+        String consumerId = "consumer456";
+        String traceId = "trace789";
+        RelatedEntity relatedEntity = new RelatedEntity(null, null, null);
+
+        doThrow(new IllegalArgumentException("Invalid input"))
+                .when(dossierService)
+                .addRelatedEntityToDossier(any(), any(), any(), any());
+
+        mockMvc.perform(post("/api/dossiers/{dossierId}/related-entities", dossierId)
+                .header("consumerId", consumerId)
+                .header("traceId", traceId)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(new ObjectMapper().writeValueAsString(relatedEntity)))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    public void testAddRelatedEntity_InternalServerError() throws Exception {
+        String dossierId = "dossier123";
+        String consumerId = "consumer456";
+        String traceId = "trace789";
+        RelatedEntity relatedEntity = new RelatedEntity("entity1", "admin123", "CUSTOMER");
+
+        doThrow(new Exception("Internal Error"))
+                .when(dossierService)
+                .addRelatedEntityToDossier(any(), any(), any(), any());
+
+        mockMvc.perform(post("/api/dossiers/{dossierId}/related-entities", dossierId)
+                .header("consumerId", consumerId)
+                .header("traceId", traceId)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(new ObjectMapper().writeValueAsString(relatedEntity)))
+                .andExpect(status().isInternalServerError());
+    }
+}
+=========== service test===
+
+@ExtendWith(MockitoExtension.class)
+public class DossierServiceTest {
+
+    @InjectMocks
+    private DossierService dossierService;
+
+    @Mock
+    private GetAllDocumentsService getAllDocumentsService;
+
+    @Mock
+    private RelatedEntityNuxeoHandler relatedEntityNuxeoHandler;
+
+    @Mock
+    private RestTemplate restTemplate;
+
+    @Mock
+    private DossierMetadataService dossierMetadataService;
+
+    @Test
+    public void testAddRelatedEntityToDossier_ValidationsFail() {
+        RelatedEntity relatedEntity = new RelatedEntity(null, null, null);
+
+        IllegalArgumentException exception = assertThrows(IllegalArgumentException.class,
+                () -> dossierService.addRelatedEntityToDossier("dossier123", "consumer123", "trace123", relatedEntity));
+
+        assertEquals("Invalid RelatedEntity provided.", exception.getMessage());
+    }
+
+    @Test
+    public void testAddRelatedEntityToDossier_ExistingInDossier() throws Exception {
+        String dossierId = "dossier123";
+        String consumerId = "consumer123";
+        String traceId = "trace123";
+
+        RelatedEntity incomingRelatedEntity = new RelatedEntity("entity1", "admin123", "CUSTOMER");
+
+        when(dossierMetadataService.getDossierMetadata(dossierId, consumerId, traceId))
+                .thenReturn(new DossierMetadata());
+
+        when(relatedEntityNuxeoHandler.readRelatedEntityInfo(any()))
+                .thenReturn(Collections.singletonList(incomingRelatedEntity));
+
+        IllegalStateException exception = assertThrows(IllegalStateException.class,
+                () -> dossierService.addRelatedEntityToDossier(dossierId, consumerId, traceId, incomingRelatedEntity));
+
+        assertEquals("Dossier already contains a RelatedEntity of type 'CUSTOMER'.", exception.getMessage());
+    }
+
+    @Test
+    public void testAddRelatedEntityToDossier_Successful() throws Exception {
+        String dossierId = "dossier123";
+        String consumerId = "consumer123";
+        String traceId = "trace123";
+
+        RelatedEntity incomingRelatedEntity = new RelatedEntity("entity1", "admin123", "CUSTOMER");
+
+        when(dossierMetadataService.getDossierMetadata(dossierId, consumerId, traceId))
+                .thenReturn(new DossierMetadata());
+
+        when(relatedEntityNuxeoHandler.readRelatedEntityInfo(any()))
+                .thenReturn(Collections.emptyList());
+
+        when(getAllDocumentsService.getAllDocuments(consumerId, dossierId, traceId))
+                .thenReturn(new DocumentList(Collections.emptyList()));
+
+        dossierService.addRelatedEntityToDossier(dossierId, consumerId, traceId, incomingRelatedEntity);
+
+        verify(dossierMetadataService, times(1)).getDossierMetadata(dossierId, consumerId, traceId);
+        verify(relatedEntityNuxeoHandler, times(1)).readRelatedEntityInfo(any());
+    }
+}
+========= validation method 
+@ExtendWith(MockitoExtension.class)
+public class RelatedEntityValidationTest {
+
+    @InjectMocks
+    private DossierService dossierService;
+
+    @Test
+    public void testValidateIncomingRelatedEntity_Valid() {
+        RelatedEntity relatedEntity = new RelatedEntity("entity1", "admin123", "CUSTOMER");
+        boolean isValid = dossierService.validateIncomingRelatedEntity(relatedEntity);
+        assertTrue(isValid);
+    }
+
+    @Test
+    public void testValidateIncomingRelatedEntity_Invalid() {
+        RelatedEntity relatedEntity = new RelatedEntity(null, null, null);
+        boolean isValid = dossierService.validateIncomingRelatedEntity(relatedEntity);
+        assertFalse(isValid);
+    }
+}
+============ seperate each methods code 
+test for validation failure 
+@Test
+public void testAddRelatedEntityToDossier_ValidationsFail() {
+    RelatedEntity relatedEntity = new RelatedEntity(null, null, null);
+
+    IllegalArgumentException exception = assertThrows(IllegalArgumentException.class,
+            () -> dossierService.addRelatedEntityToDossier("dossier123", "consumer123", "trace123", relatedEntity));
+
+    assertEquals("Invalid RelatedEntity provided.", exception.getMessage());
+}
+======
+for existing related entity 
+@Test
+public void testAddRelatedEntityToDossier_ExistingInDossier() throws Exception {
+    String dossierId = "dossier123";
+    String consumerId = "consumer123";
+    String traceId = "trace123";
+
+    RelatedEntity incomingRelatedEntity = new RelatedEntity("entity1", "admin123", "CUSTOMER");
+
+    when(dossierMetadataService.getDossierMetadata(dossierId, consumerId, traceId))
+            .thenReturn(new DossierMetadata());
+
+    when(relatedEntityNuxeoHandler.readRelatedEntityInfo(any()))
+            .thenReturn(Collections.singletonList(incomingRelatedEntity));
+
+    IllegalStateException exception = assertThrows(IllegalStateException.class,
+            () -> dossierService.addRelatedEntityToDossier(dossierId, consumerId, traceId, incomingRelatedEntity));
+
+    assertEquals("Dossier already contains a RelatedEntity of type 'CUSTOMER'.", exception.getMessage());
+}
+===
+successful addition 
+@Test
+public void testAddRelatedEntityToDossier_Successful() throws Exception {
+    String dossierId = "dossier123";
+    String consumerId = "consumer123";
+    String traceId = "trace123";
+
+    RelatedEntity incomingRelatedEntity = new RelatedEntity("entity1", "admin123", "CUSTOMER");
+
+    // Mocking for no existing RE in dossier
+    when(dossierMetadataService.getDossierMetadata(dossierId, consumerId, traceId))
+            .thenReturn(new DossierMetadata());
+    when(relatedEntityNuxeoHandler.readRelatedEntityInfo(any()))
+            .thenReturn(Collections.emptyList());
+
+    // Mocking for no RE in documents
+    when(getAllDocumentsService.getAllDocuments(consumerId, dossierId, traceId))
+            .thenReturn(new DocumentList(Collections.emptyList()));
+
+    dossierService.addRelatedEntityToDossier(dossierId, consumerId, traceId, incomingRelatedEntity);
+
+    // Verify methods are called in order
+    verify(dossierMetadataService, times(1)).getDossierMetadata(dossierId, consumerId, traceId);
+    verify(relatedEntityNuxeoHandler, times(1)).readRelatedEntityInfo(any());
+    verify(getAllDocumentsService, times(1)).getAllDocuments(consumerId, dossierId, traceId);
+}
+======
+document API failure 
+@Test
+public void testAddRelatedEntityToDossier_DocumentApiFailure() throws Exception {
+    String dossierId = "dossier123";
+    String consumerId = "consumer123";
+    String traceId = "trace123";
+
+    RelatedEntity incomingRelatedEntity = new RelatedEntity("entity1", "admin123", "CUSTOMER");
+
+    // Mocking for no existing RE in dossier
+    when(dossierMetadataService.getDossierMetadata(dossierId, consumerId, traceId))
+            .thenReturn(new DossierMetadata());
+    when(relatedEntityNuxeoHandler.readRelatedEntityInfo(any()))
+            .thenReturn(Collections.emptyList());
+
+    // Mocking documents with no RE and Document API failure
+    when(getAllDocumentsService.getAllDocuments(consumerId, dossierId, traceId))
+            .thenReturn(new DocumentList(Collections.emptyList()));
+    when(restTemplate.exchange(anyString(), eq(HttpMethod.POST), any(HttpEntity.class), eq(Void.class)))
+            .thenThrow(new RuntimeException("Document API failed"));
+
+    RuntimeException exception = assertThrows(RuntimeException.class,
+            () -> dossierService.addRelatedEntityToDossier(dossierId, consumerId, traceId, incomingRelatedEntity));
+
+    assertEquals("Document API failed", exception.getMessage());
+}

@@ -1,0 +1,320 @@
+@Slf4j
+public class RelatedEntityInfoAddHandler {
+
+    private final List<RelatedEntity> existingRelatedEntityInfo;
+    private final List<RelatedEntity> newRelatedEntityInfo;
+    private final DocumentService documentService;
+
+    public RelatedEntityInfoAddHandler(List<RelatedEntity> existingRelatedEntityInfo, 
+                                       List<RelatedEntity> newRelatedEntityInfo,
+                                       DocumentService documentService) {
+        this.existingRelatedEntityInfo = existingRelatedEntityInfo;
+        this.newRelatedEntityInfo = newRelatedEntityInfo;
+        this.documentService = documentService;
+    }
+
+    public List<RelatedEntity> update(String actorId, String traceId, String operation, String dossierId, 
+                                      List<DocumentInDossier> allDocumentsList) throws Exception {
+
+        RelatedEntity filteredEntity = validateDossierRelatedEntities();
+
+        if (filteredEntity != null) {
+            checkForDocumentsUpdate(traceId, actorId, dossierId, allDocumentsList);
+
+            List<RelatedEntity> relatedEntityList = new ArrayList<>();
+            for (RelatedEntity relatedEntity : newRelatedEntityInfo) {
+                RelatedEntity relatedEntityInfo = new RelatedEntity();
+                relatedEntityInfo.setAdministrationId(relatedEntity.getAdministrationId());
+                relatedEntityInfo.setType(relatedEntity.getType().toUpperCase(Locale.ENGLISH));
+
+                String formattedId = ("2".equalsIgnoreCase(relatedEntity.getAdministrationId()) 
+                        && "CUSTOMER".equalsIgnoreCase(relatedEntity.getType())) 
+                        ? StringUtils.stripStart(relatedEntity.getId(), "0") 
+                        : relatedEntity.getId();
+
+                relatedEntityInfo.setId(formattedId);
+
+                if ("ADDITION".equalsIgnoreCase(operation)) {
+                    relatedEntityList.add(relatedEntityInfo);
+                }
+            }
+
+            if (relatedEntityList.isEmpty()) {
+                throw new IncorrectEntityException(
+                    "AT_LEAST_ONE_RELATED_ENTITY_SHOULD_EXIST", 
+                    traceId, 
+                    "At least one related entity should exist for addition", 
+                    null, 
+                    actorId
+                );
+            }
+
+            return relatedEntityList;
+        }
+
+        throw new IncorrectEntityException(
+            "RELATED_ENTITY_INFO_ALREADY_PRESENT", 
+            traceId, 
+            "Related Entity Info already exists", 
+            null, 
+            actorId
+        );
+    }
+
+    private void checkForDocumentsUpdate(String traceId, String actorId, String dossierId, 
+                                         List<DocumentInDossier> allDocumentsList) throws Exception {
+
+        RelatedEntity incomingRelatedEntity = newRelatedEntityInfo.stream()
+            .map(entity -> new RelatedEntity(entity.getId(), entity.getAdministrationId(), entity.getType().toUpperCase(Locale.ENGLISH)))
+            .findFirst()
+            .orElse(null);
+
+        if (incomingRelatedEntity == null) {
+            throw new IllegalArgumentException("Incoming RelatedEntity cannot be null.");
+        }
+
+        if (!existingRelatedEntityInfo.isEmpty() && CollectionUtils.isNotEmpty(allDocumentsList)) {
+            for (DocumentInDossier document : allDocumentsList) {
+                List<RelatedEntity> existingDocumentEntities = document.getRelatedEntityInfo().stream()
+                    .map(entity -> new RelatedEntity(
+                        entity.getId(), 
+                        entity.getAdministrationId(), 
+                        entity.getType().toUpperCase(Locale.ENGLISH)))
+                    .collect(Collectors.toList());
+
+                String documentId = document.getId();
+
+                boolean isInDocument = existingDocumentEntities.stream()
+                    .anyMatch(existingEntity -> existingEntity.getAdministrationId().equals(incomingRelatedEntity.getAdministrationId())
+                        && existingEntity.getId().equals(incomingRelatedEntity.getId())
+                        && existingEntity.getType().equalsIgnoreCase(incomingRelatedEntity.getType()));
+
+                if (!isInDocument) {
+                    log.info("RelatedEntity not found in document [{}]. Calling Document API to add.", documentId);
+
+                    boolean documentApiSuccess = documentService.callDocumentAPI(traceId, actorId, documentId, incomingRelatedEntity);
+
+                    if (!documentApiSuccess) {
+                        throw new Exception("Document API failed. Cannot proceed with dossier update.");
+                    }
+                } else {
+                    log.info("Document [{}] already contains the RelatedEntity. Skipping Document API call.", documentId);
+                }
+            }
+        }
+    }
+
+    private RelatedEntity validateDossierRelatedEntities() {
+        RelatedEntity singleIncomingEntity = newRelatedEntityInfo.stream()
+            .map(entity -> new RelatedEntity(
+                entity.getId(), 
+                entity.getAdministrationId(), 
+                entity.getType().toUpperCase(Locale.ENGLISH)))
+            .findFirst()
+            .orElse(null);
+
+        if (singleIncomingEntity != null) {
+            boolean isValid = existingRelatedEntityInfo.stream()
+                .noneMatch(existingEntity -> existingEntity.getAdministrationId().equals(singleIncomingEntity.getAdministrationId())
+                    && existingEntity.getType().equals(singleIncomingEntity.getType())
+                    && existingEntity.getId().equals(singleIncomingEntity.getId()));
+
+            if (isValid) {
+                return singleIncomingEntity;
+            }
+        }
+
+        return null;
+    }
+}
+
+===================={Junits }===============
+
+@RunWith(MockitoJUnitRunner.class)
+public class RelatedEntityInfoAddHandlerTest {
+
+    @Mock
+    private DocumentService documentService;
+
+    private RelatedEntityInfoAddHandler relatedEntityInfoAddHandler;
+
+    private List<RelatedEntity> existingEntities;
+    private List<RelatedEntity> newEntities;
+    private List<DocumentInDossier> documents;
+
+    @Before
+    public void setUp() {
+        existingEntities = Arrays.asList(
+            new RelatedEntity("1", "2", "CUSTOMER")
+        );
+
+        newEntities = Arrays.asList(
+            new RelatedEntity("3", "2", "CUSTOMER")
+        );
+
+        documents = Arrays.asList(
+            new DocumentInDossier("doc1", Arrays.asList(new RelatedEntity("1", "2", "CUSTOMER"))),
+            new DocumentInDossier("doc2", Collections.emptyList())
+        );
+
+        relatedEntityInfoAddHandler = new RelatedEntityInfoAddHandler(existingEntities, newEntities, documentService);
+    }
+
+    @Test
+    public void testUpdate_SuccessfulAddition() throws Exception {
+        when(documentService.callDocumentAPI(anyString(), anyString(), eq("doc2"), any(RelatedEntity.class)))
+            .thenReturn(true);
+
+        List<RelatedEntity> result = relatedEntityInfoAddHandler.update("actorId", "traceId", "ADDITION", "dossierId", documents);
+
+        assertNotNull(result);
+        assertEquals(1, result.size());
+        assertEquals("CUSTOMER", result.get(0).getType());
+    }
+
+    @Test(expected = IncorrectEntityException.class)
+    public void testUpdate_EntityAlreadyExists() throws Exception {
+        newEntities = Collections.singletonList(new RelatedEntity("1", "2", "CUSTOMER"));
+        relatedEntityInfoAddHandler = new RelatedEntityInfoAddHandler(existingEntities, newEntities, documentService);
+
+        relatedEntityInfoAddHandler.update("actorId", "traceId", "ADDITION", "dossierId", documents);
+    }
+
+    @Test(expected = Exception.class)
+    public void testCheckForDocumentsUpdate_DocumentApiFails() throws Exception {
+        when(documentService.callDocumentAPI(anyString(), anyString(), eq("doc2"), any(RelatedEntity.class)))
+            .thenReturn(false);
+
+        relatedEntityInfoAddHandler.update("actorId", "traceId", "ADDITION", "dossierId", documents);
+    }
+
+    @Test
+    public void testValidateDossierRelatedEntities_ValidEntity() {
+        RelatedEntity result = relatedEntityInfoAddHandler.validateDossierRelatedEntities();
+        assertNotNull(result);
+        assertEquals("3", result.getId());
+    }
+
+    @Test
+    public void testValidateDossierRelatedEntities_NoValidEntity() {
+        newEntities = Collections.singletonList(new RelatedEntity("1", "2", "CUSTOMER"));
+        relatedEntityInfoAddHandler = new RelatedEntityInfoAddHandler(existingEntities, newEntities, documentService);
+
+        RelatedEntity result = relatedEntityInfoAddHandler.validateDossierRelatedEntities();
+        assertNull(result);
+    }
+}
+
+========
+@Test
+void testUpdate_EmptyRelatedEntityList() {
+    // Setup
+    handler = new RelatedEntityInfoAddHandler(existingEntities, Collections.emptyList());
+
+    // Act & Assert
+    IncorrectEntityException exception = assertThrows(
+        IncorrectEntityException.class,
+        () -> handler.update("actor1", "trace123", "ADDITION", "dossier1", documents)
+    );
+
+    assertEquals("AT_LEAST_ONE_RELATED_ENTITY_SHOULD_EXIST", exception.getErrorCode());
+}
+
+@Test
+void testUpdate_NullRelatedEntityList() {
+    // Setup
+    handler = new RelatedEntityInfoAddHandler(existingEntities, null);
+
+    // Act & Assert
+    IncorrectEntityException exception = assertThrows(
+        IncorrectEntityException.class,
+        () -> handler.update("actor1", "trace123", "ADDITION", "dossier1", documents)
+    );
+
+    assertEquals("AT_LEAST_ONE_RELATED_ENTITY_SHOULD_EXIST", exception.getErrorCode());
+}
+
+@Test
+void testCheckForDocumentsUpdate_EmptyDocumentList() throws Exception {
+    // Setup
+    handler = new RelatedEntityInfoAddHandler(existingEntities, newEntities);
+
+    // Act
+    handler.checkForDocumentsUpdate("trace123", "actor1", "dossier1", Collections.emptyList());
+
+    // Assert
+    // Verify no document API call occurred
+    verify(documentService, never()).callDocumentAPI(anyString(), anyString(), anyString(), any(RelatedEntity.class));
+}
+
+@Test
+void testCheckForDocumentsUpdate_NullDocumentList() throws Exception {
+    // Setup
+    handler = new RelatedEntityInfoAddHandler(existingEntities, newEntities);
+
+    // Act
+    handler.checkForDocumentsUpdate("trace123", "actor1", "dossier1", null);
+
+    // Assert
+    // Verify no document API call occurred
+    verify(documentService, never()).callDocumentAPI(anyString(), anyString(), anyString(), any(RelatedEntity.class));
+}
+
+@Test
+void testValidateDossierRelatedEntities_PartialMatch() {
+    // Setup
+    RelatedEntity partialMatchEntity = new RelatedEntity("123", "1", "CUSTOMER");
+    handler = new RelatedEntityInfoAddHandler(existingEntities, Collections.singletonList(partialMatchEntity));
+
+    // Act
+    RelatedEntity result = handler.validateDossierRelatedEntities();
+
+    // Assert
+    assertNull(result, "Partial matches should not validate as eligible.");
+}
+
+@Test
+void testUpdate_InvalidActorId() {
+    // Setup
+    handler = new RelatedEntityInfoAddHandler(existingEntities, newEntities);
+
+    // Act & Assert
+    IllegalArgumentException exception = assertThrows(
+        IllegalArgumentException.class,
+        () -> handler.update(null, "trace123", "ADDITION", "dossier1", documents)
+    );
+
+    assertEquals("ActorId cannot be null or empty.", exception.getMessage());
+}
+
+@Test
+void testUpdate_LongRelatedEntityId() {
+    // Setup
+    String longId = "A".repeat(1000);
+    RelatedEntity longIdEntity = new RelatedEntity(longId, "1", "CUSTOMER");
+    handler = new RelatedEntityInfoAddHandler(existingEntities, Collections.singletonList(longIdEntity));
+
+    // Act
+    IncorrectEntityException exception = assertThrows(
+        IncorrectEntityException.class,
+        () -> handler.update("actor1", "trace123", "ADDITION", "dossier1", documents)
+    );
+
+    // Assert
+    assertEquals("AT_LEAST_ONE_RELATED_ENTITY_SHOULD_EXIST", exception.getErrorCode());
+}
+
+@Test
+void testCheckForDocumentsUpdate_DocumentAlreadyHasEntity() throws Exception {
+    // Setup
+    DocumentInDossier docWithEntity = new DocumentInDossier("doc1", existingEntities);
+    List<DocumentInDossier> docs = Collections.singletonList(docWithEntity);
+    handler = new RelatedEntityInfoAddHandler(existingEntities, newEntities);
+
+    // Act
+    handler.checkForDocumentsUpdate("trace123", "actor1", "dossier1", docs);
+
+    // Assert
+    // Verify no Document API call occurs for a document that already has the entity
+    verify(documentService, never()).callDocumentAPI(anyString(), anyString(), anyString(), any(RelatedEntity.class));
+}

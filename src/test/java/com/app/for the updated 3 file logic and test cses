@@ -1,0 +1,320 @@
+// Corrected RelatedEntityController
+@RestController
+public class RelatedEntityController {
+
+    @Autowired
+    private RelatedEntityAddService documentRestServiceRelatedEntityUpdate;
+
+    @PostMapping("/dos/add/{id}")
+    public ResponseEntity<Void> entityAdds(
+        @RequestBody(required = true) RelatedEntity relatedEntity,
+        @PathVariable(name = "id", required = true) String dossierId,
+        @RequestHeader(name = "Trace-Id", required = false) String traceId,
+        @RequestHeader(name = "Consumer-Id", required = false) String consumerId) throws Exception {
+
+        log.info("Starting addition of related entity to document for consumerId={}", consumerId);
+        String operation = "addition";
+
+        try {
+            documentRestServiceRelatedEntityUpdate.addRelatedEntity(consumerId, traceId, dossierId, relatedEntity, operation);
+            return ResponseEntity.noContent().build();
+        } catch (ConstraintViolationException e) {
+            String exceptionCode = e.getMessage().substring(e.getMessage().lastIndexOf(":") + 1).trim();
+            log.info("Exception occurred during Related Entity Addition", e);
+            throw new BadRequestException(
+                exceptionCode,
+                ExceptionCode.valueOf(exceptionCode).getMessage(),
+                traceId
+            );
+        } catch (Exception e) {
+            log.error("Unexpected error during entity addition", e);
+            throw new RuntimeException(e);
+        }
+    }
+}
+
+// Corrected RelatedEntityAddServiceImpl
+@Slf4j
+@Validated
+@Component
+@RequiredArgsConstructor
+public class RelatedEntityAddServiceImpl implements RelatedEntityAddService {
+
+    private final GetDossierESHandler getDossierESHandler;
+    private final ResourceMapper resourceMapper;
+    private final AllowedRelatedEntityInfoValidator allowedRelatedEntityInfoValidator;
+    private final MargaService margaService;
+    private final RelatedEntityHandler relatedEntityHandler;
+    private final AuditService auditService;
+    private final RelatedEntityNuxeoHandler relatedEntityNuxeoHandler;
+    private final GetAllDocumentsService getAllDocumentsService;
+
+    public void addRelatedEntity(String consumerId, String traceId, String dossierId,
+                                 @Valid RelatedEntity relatedEntity, String operation) throws Exception {
+
+        InputValidation.checkInputParameters(consumerId, dossierId, traceId);
+        allowedRelatedEntityInfoValidator.isValidRelatedEntity(consumerId, traceId, dossierId, relatedEntity);
+
+        SearchHit searchHit = getDossierESHandler.verifyDossierExists(
+            consumerId, dossierId, "BASE_UNIQUE_ID", "BASE_SEARCH_DOSSIER", traceId);
+
+        Map<String, Object> metadata = searchHit != null ? searchHit.getSourceAsMap() : new HashMap<>();
+
+        String resourceOperation = "ADD_RELATED_ENTITY_DOSSIER";
+        Resource resource = resourceMapper.resourceAttributeMapper(metadata, "DOSSIER", resourceOperation);
+
+        Decision decision = margaService.getAuthorizationDecision(resource, traceId, consumerId);
+
+        if (decision != null && !"deny".equalsIgnoreCase(decision.getDecision())) {
+            addImpl(consumerId, traceId, dossierId, relatedEntity, operation, metadata);
+        } else {
+            log.info("Authorization call returned access denied for consumerId={}", consumerId);
+            throw new ForbiddenRequestException("ACCESS_DENIED", "Access denied to resource", traceId);
+        }
+    }
+
+    private void addImpl(String consumerId, String traceId, String dossierId,
+                         RelatedEntity relatedEntity, String operation, Map<String, Object> metadata) throws Exception {
+
+        String dossierStatus = (String) metadata.getOrDefault("DOSSIER_STATUS", "");
+
+        if ("CLOSED".equalsIgnoreCase(dossierStatus)) {
+            throw new BadRequestException("DOSSIER_ALREADY_CLOSED", "The dossier is already closed", traceId);
+        }
+
+        RelatedEntityInfoAdditionHandler relatedEntityInfoAdditionHandler = new RelatedEntityInfoAdditionHandler(
+            relatedEntityNuxeoHandler.readRelatedEntityInfo(metadata), List.of(relatedEntity));
+
+        List<DocumentInDossier> allDocumentsList = getAllDocumentsService.getAllDocuments(consumerId, dossierId, traceId)
+            .getDocumentInDossiers();
+
+        List<RelatedEntity> relatedEntityList = relatedEntityInfoAdditionHandler.update(
+            consumerId, traceId, operation, dossierId, allDocumentsList);
+
+        RelatedEntityProperties dossierProperties = new RelatedEntityProperties();
+        dossierProperties.setUuid((String) metadata.get("REPO_ID"));
+
+        NuxeoRelatedEntityProperties nuxeoProperties = relatedEntityNuxeoHandler.loadRelatedEntities(relatedEntityList);
+        dossierProperties.setProperties(nuxeoProperties);
+
+        String UID = (String) metadata.get("BASE_UNIQUE_ID");
+
+        if ("ADDITION".equalsIgnoreCase(operation)) {
+            relatedEntityHandler.relatedEntityInNuxeo(dossierProperties, consumerId, traceId, "ADDED");
+            auditService.auditRequest(UID, consumerId, traceId, "ADD_RELATED_ENTITY_DOSSIER");
+        } else {
+            relatedEntityHandler.relatedEntityInNuxeo(dossierProperties, consumerId, traceId, "DELETED");
+            auditService.auditRequest(UID, consumerId, traceId, "DELETE_RELATED_ENTITY_DOSSIER");
+        }
+    }
+}
+
+// Corrected AllowedRelatedEntityInfoValidator
+public class AllowedRelatedEntityInfoValidator {
+
+    private final AdministrationServiceImpl administrationList;
+
+    public AllowedRelatedEntityInfoValidator(AdministrationServiceImpl administrationList) {
+        this.administrationList = administrationList;
+    }
+
+    public boolean isValidRelatedEntity(String consumerId, String traceId, String dossierId, RelatedEntity relatedEntity)
+        throws IncorrectEntityException, BadRequestException, ForbiddenRequestException {
+
+        if (relatedEntity == null) {
+            log.error("At least one Related Entity Information is mandatory for dossierId={}", dossierId);
+            throw new BadRequestException("RELATED_ENTITY_INFO_MISSING", "Related entity info is missing", traceId);
+        }
+
+        boolean isValidRelatedEntity = validateType(consumerId, traceId, relatedEntity, dossierId) &&
+                                       validateIdentifierAdminId(consumerId, traceId, relatedEntity, dossierId) &&
+                                       validateIdentifierId(consumerId, traceId, relatedEntity, dossierId);
+
+        doValidate(relatedEntity, traceId, consumerId);
+        return isValidRelatedEntity;
+    }
+
+    public void doValidate(String traceId, String consumerId, RelatedEntity relatedEntity)
+        throws IncorrectEntityException, ForbiddenRequestException, BadRequestException {
+
+        String relatedEntityAdministrationId = relatedEntity.getAdministrationId();
+        String relatedEntityAdministrationType = relatedEntity.getType().toLowerCase(Locale.ENGLISH);
+
+        List<String> relatedEntityAdministrationIds = administrationList.getRelatedEntityAdministrations()
+            .get(relatedEntityAdministrationType);
+
+        if (relatedEntityAdministrationIds == null || relatedEntityAdministrationIds.isEmpty() ||
+            relatedEntityAdministrationIds.stream().noneMatch(relatedEntityAdministrationId::equals)) {
+            throw new IncorrectEntityException(
+                "RELATED_ENTITY_INFO_ADMINISTRATION_ID_INVALID",
+                "Administration ID is invalid",
+                traceId
+            );
+        }
+    }
+
+    // Placeholder for validate methods
+    private boolean validateType(String consumerId, String traceId, RelatedEntity relatedEntity, String dossierId) {
+        // Add validation logic here
+        return true;
+    }
+
+    private boolean validateIdentifierAdminId(String consumerId, String traceId, RelatedEntity relatedEntity, String dossierId) {
+        // Add validation logic here
+        return true;
+    }
+
+    private boolean validateIdentifierId(String consumerId, String traceId, RelatedEntity relatedEntity, String dossierId) {
+        // Add validation logic here
+        return true;
+    }
+}
+
+
+=======================================================
+
+JUNITS
+
+
+// JUnit tests for RelatedEntityController
+@SpringBootTest
+@AutoConfigureMockMvc
+public class RelatedEntityControllerTest {
+
+    @Autowired
+    private MockMvc mockMvc;
+
+    @MockBean
+    private RelatedEntityAddService relatedEntityAddService;
+
+    @Test
+    void testEntityAdds_Success() throws Exception {
+        RelatedEntity relatedEntity = new RelatedEntity();
+        relatedEntity.setAdministrationId("admin123");
+        relatedEntity.setType("typeA");
+        relatedEntity.setId("id123");
+
+        mockMvc.perform(post("/dos/add/{id}", "dossier123")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(new ObjectMapper().writeValueAsString(relatedEntity))
+                .header("Trace-Id", "trace123")
+                .header("Consumer-Id", "consumer123"))
+                .andExpect(status().isNoContent());
+
+        verify(relatedEntityAddService, times(1))
+                .addRelatedEntity("consumer123", "trace123", "dossier123", relatedEntity, "addition");
+    }
+
+    @Test
+    void testEntityAdds_BadRequestException() throws Exception {
+        doThrow(new BadRequestException("ERROR_CODE", "Invalid input", "trace123"))
+                .when(relatedEntityAddService)
+                .addRelatedEntity(anyString(), anyString(), anyString(), any(RelatedEntity.class), anyString());
+
+        mockMvc.perform(post("/dos/add/{id}", "dossier123")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(new ObjectMapper().writeValueAsString(new RelatedEntity()))
+                .header("Trace-Id", "trace123")
+                .header("Consumer-Id", "consumer123"))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void testEntityAdds_RuntimeException() throws Exception {
+        doThrow(new RuntimeException("Unexpected error"))
+                .when(relatedEntityAddService)
+                .addRelatedEntity(anyString(), anyString(), anyString(), any(RelatedEntity.class), anyString());
+
+        mockMvc.perform(post("/dos/add/{id}", "dossier123")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(new ObjectMapper().writeValueAsString(new RelatedEntity()))
+                .header("Trace-Id", "trace123")
+                .header("Consumer-Id", "consumer123"))
+                .andExpect(status().isInternalServerError());
+    }
+}
+
+// JUnit tests for RelatedEntityAddServiceImpl
+@ExtendWith(MockitoExtension.class)
+public class RelatedEntityAddServiceImplTest {
+
+    @Mock
+    private GetDossierESHandler getDossierESHandler;
+
+    @Mock
+    private ResourceMapper resourceMapper;
+
+    @Mock
+    private AllowedRelatedEntityInfoValidator allowedRelatedEntityInfoValidator;
+
+    @Mock
+    private MargaService margaService;
+
+    @Mock
+    private RelatedEntityHandler relatedEntityHandler;
+
+    @Mock
+    private AuditService auditService;
+
+    @Mock
+    private RelatedEntityNuxeoHandler relatedEntityNuxeoHandler;
+
+    @Mock
+    private GetAllDocumentsService getAllDocumentsService;
+
+    @InjectMocks
+    private RelatedEntityAddServiceImpl service;
+
+    @Test
+    void testAddRelatedEntity_Success() throws Exception {
+        RelatedEntity relatedEntity = new RelatedEntity();
+        relatedEntity.setAdministrationId("admin123");
+        relatedEntity.setType("typeA");
+        relatedEntity.setId("id123");
+
+        SearchHit searchHit = mock(SearchHit.class);
+        when(searchHit.getSourceAsMap()).thenReturn(Map.of("key", "value"));
+        when(getDossierESHandler.verifyDossierExists(anyString(), anyString(), anyString(), anyString(), anyString()))
+                .thenReturn(searchHit);
+
+        Decision decision = new Decision("permit", null);
+        when(margaService.getAuthorizationDecision(any(Resource.class), anyString(), anyString()))
+                .thenReturn(decision);
+
+        service.addRelatedEntity("consumer123", "trace123", "dossier123", relatedEntity, "addition");
+
+        verify(auditService, times(1)).auditRequest(anyString(), anyString(), anyString(), eq("ADD_RELATED_ENTITY_DOSSIER"));
+    }
+
+    @Test
+    void testAddRelatedEntity_AccessDenied() {
+        Decision decision = new Decision("deny", null);
+        when(margaService.getAuthorizationDecision(any(Resource.class), anyString(), anyString()))
+                .thenReturn(decision);
+
+        assertThrows(ForbiddenRequestException.class, () ->
+                service.addRelatedEntity("consumer123", "trace123", "dossier123", new RelatedEntity(), "addition"));
+    }
+
+    @Test
+    void testAddRelatedEntity_BadRequest_DossierClosed() {
+        RelatedEntity relatedEntity = new RelatedEntity();
+        relatedEntity.setAdministrationId("admin123");
+        relatedEntity.setType("typeA");
+        relatedEntity.setId("id123");
+
+        Map<String, Object> metadata = new HashMap<>();
+        metadata.put("DOSSIER_STATUS", "CLOSED");
+
+        SearchHit searchHit = mock(SearchHit.class);
+        when(searchHit.getSourceAsMap()).thenReturn(metadata);
+
+        when(getDossierESHandler.verifyDossierExists(anyString(), anyString(), anyString(), anyString(), anyString()))
+                .thenReturn(searchHit);
+
+        assertThrows(BadRequestException.class, () ->
+                service.addRelatedEntity("consumer123", "trace123", "dossier123", relatedEntity, "addition"));
+    }
+}
+
+// Add similar unit tests for AllowedRelatedEntityInfoValidator

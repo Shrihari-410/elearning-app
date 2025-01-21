@@ -1,0 +1,290 @@
+Successful Scenarios
+
+1. Dossier without Existing Related Entity:
+
+Dossier has no related entities, and the incoming RelatedEntity passes all validations.
+
+Expected Outcome: The RelatedEntity is added to the dossier successfully.
+
+
+
+2. Dossier and Documents Without Matching Related Entity:
+
+Dossier has no related entities, and documents do not contain any RelatedEntity of the same type.
+
+Expected Outcome: The RelatedEntity is added to both the dossier and the necessary documents.
+
+
+
+3. Dossier Validates impkey Correctly:
+
+The dossier's impkey matches /rg/International Desk/Client Onboarding and incoming RelatedEntity passes validations.
+
+Expected Outcome: The flow proceeds and adds the RelatedEntity.
+
+
+
+4. Document API Call Successful:
+
+The document API is called for documents without the matching RelatedEntity, and it succeeds.
+
+Expected Outcome: Documents and the dossier are updated successfully.
+
+
+
+
+
+---
+
+Failure Scenarios
+
+1. Dossier Has Existing Related Entity of the Same Type:
+
+The dossier already has a RelatedEntity of type CUSTOMER.
+
+Expected Outcome: The flow halts with a user-friendly message indicating no addition is needed.
+
+
+
+2. Document Already Contains Matching Related Entity:
+
+The document contains a RelatedEntity with the same type as the incoming one.
+
+Expected Outcome: The flow skips updating the document and proceeds to the next step.
+
+
+
+3. Invalid or Missing impkey:
+
+The dossier's impkey is invalid (not matching /rg/International Desk/... or /BG/...) or missing.
+
+Expected Outcome: The flow halts with an appropriate error message.
+
+
+
+4. Document API Call Fails:
+
+The document API fails due to a network issue, timeout, or a bad request.
+
+Expected Outcome: The flow halts, and the RelatedEntity is not added to the dossier.
+
+
+
+5. Incoming Related Entity is Null or Malformed:
+
+The incoming RelatedEntity is null or has missing fields (e.g., id, administrationId, or type).
+
+Expected Outcome: Validation fails, and the flow halts with an error message.
+
+
+
+6. Dossier Has No Documents and RE Exists:
+
+The dossier has no documents, but a matching RelatedEntity exists.
+
+Expected Outcome: No addition happens, and the user is informed.
+
+
+
+7. Invalid Administration ID or Type:
+
+The incoming RelatedEntity has an invalid administrationId or type.
+
+Expected Outcome: Validation fails, and the flow stops.
+
+
+
+
+
+---
+
+Testing Strategy
+
+For each scenario, use the following approach:
+
+1. Controller-Level Tests:
+
+Verify the behavior of the controller method with mocked dependencies.
+
+
+
+2. Service-Level Tests:
+
+Test each method independently with various inputs.
+
+
+
+3. Integration Tests:
+
+Simulate the entire flow, including dependent components like the document API.
+
+
+
+4. Boundary Tests:
+
+Test edge cases such as empty fields, oversized inputs, and invalid formats.
+
+
+
+public class DossierControllerTestApp {
+    public static void main(String[] args) {
+        // Mock dependencies
+        RestTemplate restTemplate = new RestTemplate();
+        GetAllDocumentsService getAllDocumentsService = new GetAllDocumentsService();
+        RelatedEntityNuxeoHandler relatedEntityNuxeoHandler = new RelatedEntityNuxeoHandler();
+        DossierMetadataService dossierMetadataService = new DossierMetadataService();
+        DossierService dossierService = new DossierService(
+                getAllDocumentsService, 
+                relatedEntityNuxeoHandler, 
+                dossierMetadataService, 
+                restTemplate
+        );
+
+        DossierController dossierController = new DossierController(dossierService);
+
+        // Test input
+        String dossierId = "dossier123";
+        String consumerId = "consumer123";
+        String traceId = "trace123";
+        RelatedEntity incomingRelatedEntity = new RelatedEntity("entity1", "admin123", "CUSTOMER");
+
+        try {
+            // Simulate the controller call
+            dossierController.addRelatedEntity(dossierId, consumerId, traceId, incomingRelatedEntity);
+            System.out.println("Flow completed successfully.");
+        } catch (Exception e) {
+            System.err.println("Flow failed: " + e.getMessage());
+        }
+    }
+}
+
+
+
+import java.util.Collections;
+
+public class DossierServiceTestApp {
+    public static void main(String[] args) {
+        // Instantiate necessary services and mocks
+        GetAllDocumentsService getAllDocumentsService = new GetAllDocumentsService(); // Replace with your actual implementation
+        RelatedEntityNuxeoHandler relatedEntityNuxeoHandler = new RelatedEntityNuxeoHandler(); // Replace with your actual implementation
+        DossierMetadataService dossierMetadataService = new DossierMetadataService(); // Replace with your actual implementation
+        RestTemplate restTemplate = new RestTemplate(); // Replace with actual configuration
+
+        DossierService dossierService = new DossierService(
+                getAllDocumentsService,
+                relatedEntityNuxeoHandler,
+                dossierMetadataService,
+                restTemplate
+        );
+
+        // Hardcoded test inputs
+        String dossierId = "dossier123";
+        String consumerId = "consumer123";
+        String traceId = "trace123";
+        RelatedEntity incomingRelatedEntity = new RelatedEntity("entity1", "admin123", "CUSTOMER");
+
+        try {
+            // Call the method to test
+            dossierService.addRelatedEntityToDossier(dossierId, consumerId, traceId, incomingRelatedEntity);
+            System.out.println("Related entity added successfully.");
+        } catch (Exception e) {
+            System.err.println("An error occurred: " + e.getMessage());
+        }
+    }
+}
+public class RelatedEntity {
+    private String id;
+    private String administrationId;
+    private String type;
+
+    // Constructor
+    public RelatedEntity(String id, String administrationId, String type) {
+        this.id = id;
+        this.administrationId = administrationId;
+        this.type = type;
+    }
+
+    // Getters and Setters
+    public String getId() {
+        return id;
+    }
+
+    public String getAdministrationId() {
+        return administrationId;
+    }
+
+    public String getType() {
+        return type;
+    }
+}
+import java.util.List;
+
+public class DocumentInDossier {
+    private String id;
+    private List<RelatedEntity> relatedEntityInfo;
+
+    // Constructor
+    public DocumentInDossier(String id, List<RelatedEntity> relatedEntityInfo) {
+        this.id = id;
+        this.relatedEntityInfo = relatedEntityInfo;
+    }
+
+    // Getters
+    public String getId() {
+        return id;
+    }
+
+    public List<RelatedEntity> getRelatedEntityInfo() {
+        return relatedEntityInfo;
+    }
+}
+import java.util.List;
+
+public class DocumentList {
+    private List<DocumentInDossier> documentInDossiers;
+
+    // Constructor
+    public DocumentList(List<DocumentInDossier> documentInDossiers) {
+        this.documentInDossiers = documentInDossiers;
+    }
+
+    // Getter
+    public List<DocumentInDossier> getDocumentInDossiers() {
+        return documentInDossiers;
+    }
+}
+public class GetAllDocumentsService {
+    public DocumentList getAllDocuments(String consumerId, String dossierId, String traceId) {
+        // Hardcoded document list
+        return new DocumentList(Collections.singletonList(
+                new DocumentInDossier("doc123", Collections.singletonList(
+                        new RelatedEntity("entity2", "admin456", "CUSTOMER")
+                ))
+        ));
+    }
+}
+public class DossierMetadataService {
+    public DossierMetadata getDossierMetadata(String dossierId, String consumerId, String traceId) {
+        // Hardcoded metadata
+        return new DossierMetadata("/rg/International Desk/Client Onboarding");
+    }
+}
+public class RelatedEntityNuxeoHandler {
+    public List<RelatedEntity> readRelatedEntityInfo(DossierMetadata dossierMetadata) {
+        // Hardcoded related entities in dossier
+        return Collections.singletonList(new RelatedEntity("entity2", "admin456", "CUSTOMER"));
+    }
+}
+public class DossierMetadata {
+    private String impkey;
+
+    // Constructor
+    public DossierMetadata(String impkey) {
+        this.impkey = impkey;
+    }
+
+    // Getter
+    public String getImpkey() {
+        return impkey;
+    }
+}

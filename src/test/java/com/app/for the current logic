@@ -1,4 +1,91 @@
+
 junits for controller class 
+
+import org.junit.jupiter.api.Test;
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
+import org.mockito.MockitoAnnotations;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.doNothing;
+import static org.mockito.Mockito.doThrow;
+
+class RelatedEntityControllerTest {
+
+    @Mock
+    private RelatedEntityAddService relatedEntityAddService;
+
+    @InjectMocks
+    private RelatedEntityController relatedEntityController;
+
+    public RelatedEntityControllerTest() {
+        MockitoAnnotations.openMocks(this);
+    }
+
+    @Test
+    void testEntityAdds_Success() throws Exception {
+        // Arrange
+        RelatedEntity relatedEntity = new RelatedEntity();
+        relatedEntity.setId("123");
+        relatedEntity.setType("CUSTOMER");
+        relatedEntity.setAdministrationId("ADMIN1");
+
+        doNothing().when(relatedEntityAddService).addRelatedEntity(
+                anyString(), anyString(), anyString(), any(RelatedEntity.class), anyString());
+
+        // Act
+        ResponseEntity<?> response = relatedEntityController.entityAdds(
+                relatedEntity, "dossier123", "trace123", "consumer123");
+
+        // Assert
+        assertEquals(HttpStatus.NO_CONTENT, response.getStatusCode());
+    }
+
+    @Test
+    void testEntityAdds_ConstraintViolationException() throws Exception {
+        // Arrange
+        RelatedEntity relatedEntity = new RelatedEntity();
+        relatedEntity.setId("123");
+        relatedEntity.setType("CUSTOMER");
+        relatedEntity.setAdministrationId("ADMIN1");
+
+        doThrow(new ConstraintViolationException("Violation: INVALID_ENTITY", null))
+                .when(relatedEntityAddService).addRelatedEntity(anyString(), anyString(), anyString(), any(), anyString());
+
+        // Act & Assert
+        try {
+            relatedEntityController.entityAdds(relatedEntity, "dossier123", "trace123", "consumer123");
+        } catch (BadRequestException ex) {
+            assertEquals("INVALID_ENTITY", ex.getMessage());
+        }
+    }
+
+    @Test
+    void testEntityAdds_Exception() throws Exception {
+        // Arrange
+        RelatedEntity relatedEntity = new RelatedEntity();
+        relatedEntity.setId("123");
+        relatedEntity.setType("CUSTOMER");
+        relatedEntity.setAdministrationId("ADMIN1");
+
+        doThrow(new RuntimeException("Internal Error"))
+                .when(relatedEntityAddService).addRelatedEntity(anyString(), anyString(), anyString(), any(), anyString());
+
+        // Act & Assert
+        try {
+            relatedEntityController.entityAdds(relatedEntity, "dossier123", "trace123", "consumer123");
+        } catch (RuntimeException ex) {
+            assertEquals("Internal Error", ex.getMessage());
+        }
+    }
+}
+
+
+===============================
 
 @WebMvcTest(RelatedEntityController.class)
 @ExtendWith(SpringExtension.class)

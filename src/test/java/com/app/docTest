@@ -1,0 +1,139 @@
+public boolean callDocumentAPI(String traceId, String consumerId, DocumentRelatedEntityProperties documentProperties) 
+        throws BadRequestException, IOException {
+    try {
+        // Create HTTP request
+        HttpEntity<?> httpRequest = new HttpEntity<>(documentProperties, driHeaderSetting.settingDriHeader(traceId, consumerId, null));
+
+        // Make the API call
+        ResponseEntity<String> response = restTemplate.exchange(driUrl, HttpMethod.POST, httpRequest, String.class);
+
+        log.info("The Document API called successfully for documentIds: {}", documentProperties.getDocumentIds());
+        return response.getStatusCode().is2xxSuccessful();
+    } catch (HttpClientErrorException e) {
+        log.error("The Document API call failed for consumerId {}, traceId {} and documentIds {} because of {}",
+                consumerId, traceId, documentProperties.getDocumentIds(), e.getMessage());
+        throw new BadRequestException("Client error occurred while calling Document API", e);
+    } catch (HttpServerErrorException e) {
+        log.error("Server error occurred while calling Document API for consumerId {}, traceId {} and documentIds {}",
+                consumerId, traceId, documentProperties.getDocumentIds());
+        throw new IOException("Server error occurred while calling Document API", e);
+    } catch (Exception e) {
+        log.error("Unexpected error occurred while calling Document API for consumerId {}, traceId {} and documentIds {}",
+                consumerId, traceId, documentProperties.getDocumentIds());
+        throw new RuntimeException("Unexpected error occurred while calling Document API", e);
+    }
+}
+
+
+@SpringBootTest
+@RunWith(MockitoJUnitRunner.class)
+public class DocumentServiceTest {
+
+    @InjectMocks
+    private DocumentService documentService;
+
+    @Mock
+    private RestTemplate restTemplate;
+
+    @Mock
+    private DriHeaderSetting driHeaderSetting;
+
+    private static final String TRACE_ID = "trace123";
+    private static final String CONSUMER_ID = "consumer123";
+    private static final String DRI_URL = "http://document-service/documents";
+
+    private List<String> documentIdList;
+    private List<RelatedEntity> relatedEntityList;
+    private DocumentRelatedEntityProperties documentProperties;
+
+    @Before
+    public void setUp() {
+        // Initialize test data
+        documentIdList = new ArrayList<>();
+        documentIdList.add("documentId");
+
+        RelatedEntity relatedEntity = new RelatedEntity();
+        relatedEntity.setAdministrationId("16");
+        relatedEntity.setId("51");
+        relatedEntity.setType("CUSTOMER");
+
+        relatedEntityList = new ArrayList<>();
+        relatedEntityList.add(relatedEntity);
+
+        documentProperties = new DocumentRelatedEntityProperties();
+        documentProperties.setDocumentIds(documentIdList);
+        documentProperties.setRelatedEntities(relatedEntityList);
+
+        // Set up mock environment
+        ReflectionTestUtils.setField(documentService, "driUrl", DRI_URL);
+    }
+
+    @Test
+    public void testCallDocumentApi_Success() throws Exception {
+        // Mocking
+        HttpHeaders headers = new HttpHeaders();
+        when(driHeaderSetting.settingDriHeader(TRACE_ID, CONSUMER_ID, null)).thenReturn(headers);
+
+        ResponseEntity<String> responseEntity = new ResponseEntity<>("", HttpStatus.OK);
+        when(restTemplate.exchange(eq(DRI_URL), eq(HttpMethod.POST), any(HttpEntity.class), eq(String.class)))
+                .thenReturn(responseEntity);
+
+        // Act
+        boolean result = documentService.callDocumentAPI(TRACE_ID, CONSUMER_ID, documentProperties);
+
+        // Assert
+        assertTrue(result);
+        verify(restTemplate, times(1)).exchange(eq(DRI_URL), eq(HttpMethod.POST), any(HttpEntity.class), eq(String.class));
+    }
+
+    @Test
+    public void testCallDocumentApi_ClientError() {
+        // Mocking
+        HttpHeaders headers = new HttpHeaders();
+        when(driHeaderSetting.settingDriHeader(TRACE_ID, CONSUMER_ID, null)).thenReturn(headers);
+
+        when(restTemplate.exchange(eq(DRI_URL), eq(HttpMethod.POST), any(HttpEntity.class), eq(String.class)))
+                .thenThrow(new HttpClientErrorException(HttpStatus.BAD_REQUEST, "Bad Request"));
+
+        // Act & Assert
+        BadRequestException exception = assertThrows(BadRequestException.class, () -> {
+            documentService.callDocumentAPI(TRACE_ID, CONSUMER_ID, documentProperties);
+        });
+
+        assertEquals("Client error occurred while calling Document API", exception.getMessage());
+    }
+
+    @Test
+    public void testCallDocumentApi_ServerError() {
+        // Mocking
+        HttpHeaders headers = new HttpHeaders();
+        when(driHeaderSetting.settingDriHeader(TRACE_ID, CONSUMER_ID, null)).thenReturn(headers);
+
+        when(restTemplate.exchange(eq(DRI_URL), eq(HttpMethod.POST), any(HttpEntity.class), eq(String.class)))
+                .thenThrow(new HttpServerErrorException(HttpStatus.INTERNAL_SERVER_ERROR, "Internal Server Error"));
+
+        // Act & Assert
+        IOException exception = assertThrows(IOException.class, () -> {
+            documentService.callDocumentAPI(TRACE_ID, CONSUMER_ID, documentProperties);
+        });
+
+        assertEquals("Server error occurred while calling Document API", exception.getMessage());
+    }
+
+    @Test
+    public void testCallDocumentApi_UnhandledException() {
+        // Mocking
+        HttpHeaders headers = new HttpHeaders();
+        when(driHeaderSetting.settingDriHeader(TRACE_ID, CONSUMER_ID, null)).thenReturn(headers);
+
+        when(restTemplate.exchange(eq(DRI_URL), eq(HttpMethod.POST), any(HttpEntity.class), eq(String.class)))
+                .thenThrow(new RuntimeException("Unexpected error"));
+
+        // Act & Assert
+        RuntimeException exception = assertThrows(RuntimeException.class, () -> {
+            documentService.callDocumentAPI(TRACE_ID, CONSUMER_ID, documentProperties);
+        });
+
+        assertEquals("Unexpected error occurred while calling Document API", exception.getMessage());
+    }
+}

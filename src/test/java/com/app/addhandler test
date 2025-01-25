@@ -1,0 +1,149 @@
+@SpringBootTest
+@RunWith(MockitoJUnitRunner.class)
+public class YourClassTest {
+
+    @InjectMocks
+    private YourClass classUnderTest;
+
+    @Mock
+    private SomeDependency someDependency; // Replace with actual dependencies
+    
+    @Mock
+    private AnotherDependency anotherDependency;
+
+    private static final String ACTOR_ID = "actor123";
+    private static final String TRACE_ID = "trace123";
+    private static final String DOSSIER_ID = "dossier123";
+    private static final String ES_SECURITY_CLASSIFIER_1 = "/SG/International Desk/Client Onboarding";
+    private static final String ES_SECURITY_CLASSIFIER_2 = "/SG/International Desk/Others";
+
+    private List<RelatedEntity> validIncomingEntities;
+    private List<DocumentInDossier> allDocumentsList;
+
+    @Before
+    public void setUp() {
+        validIncomingEntities = new ArrayList<>();
+        allDocumentsList = new ArrayList<>();
+    }
+
+    @Test
+    public void testUpdate_ValidEntities_WithSecurityClassifier1_NoDocuments() throws Exception {
+        // Arrange
+        mockValidIncomingEntities();
+        when(someDependency.validateDossierRelatedEntities(ACTOR_ID, TRACE_ID, DOSSIER_ID))
+                .thenReturn(validIncomingEntities);
+
+        // Act
+        List<RelatedEntity> result = classUnderTest.update(
+                ACTOR_ID, TRACE_ID, "operation", DOSSIER_ID, allDocumentsList, ES_SECURITY_CLASSIFIER_1);
+
+        // Assert
+        assertNotNull(result);
+        assertTrue(result.isEmpty());
+    }
+
+    @Test
+    public void testUpdate_ValidEntities_WithSecurityClassifier1_WithDocuments() throws Exception {
+        // Arrange
+        mockValidIncomingEntities();
+        mockAllDocumentsList();
+        when(someDependency.validateDossierRelatedEntities(ACTOR_ID, TRACE_ID, DOSSIER_ID))
+                .thenReturn(validIncomingEntities);
+
+        // Act
+        List<RelatedEntity> result = classUnderTest.update(
+                ACTOR_ID, TRACE_ID, "operation", DOSSIER_ID, allDocumentsList, ES_SECURITY_CLASSIFIER_1);
+
+        // Assert
+        assertNotNull(result);
+        assertEquals(validIncomingEntities.size(), result.size());
+        verify(someDependency).checkForDocumentsUpdate(TRACE_ID, ACTOR_ID, DOSSIER_ID, allDocumentsList);
+    }
+
+    @Test
+    public void testUpdate_InvalidSecurityClassifier() throws Exception {
+        // Arrange
+        when(someDependency.validateDossierRelatedEntities(ACTOR_ID, TRACE_ID, DOSSIER_ID))
+                .thenReturn(validIncomingEntities);
+
+        // Act
+        List<RelatedEntity> result = classUnderTest.update(
+                ACTOR_ID, TRACE_ID, "operation", DOSSIER_ID, allDocumentsList, "INVALID_CLASSIFIER");
+
+        // Assert
+        assertNotNull(result);
+        assertTrue(result.isEmpty());
+    }
+
+    @Test
+    public void testUpdate_ValidEntities_WithSecurityClassifier2_NoDocuments() throws Exception {
+        // Arrange
+        mockValidIncomingEntities();
+        when(someDependency.validateDossierRelatedEntities(ACTOR_ID, TRACE_ID, DOSSIER_ID))
+                .thenReturn(validIncomingEntities);
+
+        // Act & Assert
+        IncorrectEntityException exception = assertThrows(IncorrectEntityException.class, () -> {
+            classUnderTest.update(ACTOR_ID, TRACE_ID, "operation", DOSSIER_ID, allDocumentsList, ES_SECURITY_CLASSIFIER_2);
+        });
+
+        assertEquals("AT_LEAST_ONE_RELATED_ENTITY_EXIST", exception.getMessage());
+    }
+
+    @Test
+    public void testUpdate_EmptyValidIncomingEntities() throws Exception {
+        // Arrange
+        when(someDependency.validateDossierRelatedEntities(ACTOR_ID, TRACE_ID, DOSSIER_ID))
+                .thenReturn(new ArrayList<>());
+
+        // Act
+        List<RelatedEntity> result = classUnderTest.update(
+                ACTOR_ID, TRACE_ID, "operation", DOSSIER_ID, allDocumentsList, ES_SECURITY_CLASSIFIER_1);
+
+        // Assert
+        assertNotNull(result);
+        assertTrue(result.isEmpty());
+    }
+
+    @Test
+    public void testUpdate_ExceptionThrownDuringValidation() throws Exception {
+        // Arrange
+        when(someDependency.validateDossierRelatedEntities(ACTOR_ID, TRACE_ID, DOSSIER_ID))
+                .thenThrow(new IOException("Validation error"));
+
+        // Act & Assert
+        IOException exception = assertThrows(IOException.class, () -> {
+            classUnderTest.update(ACTOR_ID, TRACE_ID, "operation", DOSSIER_ID, allDocumentsList, ES_SECURITY_CLASSIFIER_1);
+        });
+
+        assertEquals("Validation error", exception.getMessage());
+    }
+
+    private void mockValidIncomingEntities() {
+        RelatedEntity entity1 = new RelatedEntity();
+        entity1.setAdministrationId("1");
+        entity1.setId("00123");
+        entity1.setType("CUSTOMER");
+
+        RelatedEntity entity2 = new RelatedEntity();
+        entity2.setAdministrationId("2");
+        entity2.setId("00456");
+        entity2.setType("SUPPLIER");
+
+        validIncomingEntities.add(entity1);
+        validIncomingEntities.add(entity2);
+    }
+
+    private void mockAllDocumentsList() {
+        DocumentInDossier doc1 = new DocumentInDossier();
+        doc1.setDocumentId("doc1");
+        doc1.setDocumentType("TYPE1");
+
+        DocumentInDossier doc2 = new DocumentInDossier();
+        doc2.setDocumentId("doc2");
+        doc2.setDocumentType("TYPE2");
+
+        allDocumentsList.add(doc1);
+        allDocumentsList.add(doc2);
+    }
+}

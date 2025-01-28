@@ -1,0 +1,79 @@
+Absolutely! Here's a JUnit 5 test class for the provided Java code, along with explanations and considerations for thorough testing:
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+
+import java.io.IOException;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.Mockito.*;
+
+@ExtendWith(MockitoExtension.class)
+public class YourClassNameTest { // Replace YourClassName
+
+    @InjectMocks
+    private YourClassName yourClass; // Replace YourClassName
+
+    @Mock
+    private InputValidation inputValidation;
+    @Mock
+    private AllowedRelatedEntityInfoValidator allowedRelatedEntityInfoValidator;
+    @Mock
+    private GetDossierESHandler getDossierESHandler;
+    @Mock
+    private ResourceMapper resourceMapper;
+    @Mock
+    private SecurityService securityService;
+    @Mock
+    private AddRelatedEntityTriplet relatedEntities; // Assuming this is a class you have
+    @Mock
+    private SearchHit searchHit; // Assuming this is a class you have
+    @Mock
+    private Logger log; // Assuming you have a Logger
+
+    @Test
+    void testAddRelatedEntity_Success() throws GenericException, IOException {
+        // Arrange
+        String consumerId = "testConsumer";
+        String traceId = "testTrace";
+        String dossierId = "testDossier";
+        String operation = "testOp";
+        List<RelatedEntity> relatedEntityList = List.of(new RelatedEntity()); // Example list
+        when(relatedEntities.getRelatedEntities()).thenReturn(relatedEntityList);
+        when(getDossierESHandler.verifyDossierExists(any(), any(), any(), any(), any())).thenReturn(searchHit);
+        when(searchHit.getSourceAsMap()).thenReturn(new HashMap<>());
+        when(securityService.getAuthorizationDecision(any(), any(), any())).thenReturn(new Decision("permit")); // Permit
+
+        // Act
+        yourClass.addRelatedEntity(consumerId, traceId, dossierId, relatedEntities, operation);
+
+        // Assert
+        verify(inputValidation).checkInputParameters(consumerId, dossierId, traceId);
+        verify(allowedRelatedEntityInfoValidator).isValid(consumerId, traceId, dossierId, relatedEntityList);
+        verify(getDossierESHandler).verifyDossierExists(consumerId, dossierId, "BASE UNIQUE ID", "BASE_SEARCH DOSSIER", traceId);
+        verify(resourceMapper).resourceAttributeMapper(anyMap(), eq("DOSSIER"), eq("ADD_RELATED_ENTITY_DOSSIER"));
+        verify(securityService).getAuthorizationDecision(any(), eq(traceId), eq(consumerId));
+        // Add assertions for the addImpl method call if needed (e.g., using ArgumentCaptor)
+    }
+
+    @Test
+    void testAddRelatedEntity_Forbidden() throws GenericException, IOException {
+        // Arrange
+        String consumerId = "testConsumer";
+        String traceId = "testTrace";
+        String dossierId = "testDossier";
+        String operation = "testOp";
+        when(securityService.getAuthorizationDecision(any(), any(), any())).thenReturn(new Decision("deny")); // Deny
+
+        // Act & Assert
+        assertThrows(ForbiddenRequestException.class, () -> {
+            yourClass.addRelatedEntity(consumerId, traceId, dossierId, relatedEntities, operation);
+        });
+
+        verify(log).info("Authorize call returns with access denied for consumer id ()", consumerId);
+    }
